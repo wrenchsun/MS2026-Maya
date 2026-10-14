@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Maya との FBX 交換フォルダ（ローカル作業用。コミットしない）
+MayaWork/
+
+# ローカル設定
+.claude/settings.local.json
+*.local.json
+
+# OS / Editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.tmp

@@ -1,0 +1,9 @@
+{
+  "id": "ms2026_greybox",
+  "name": "MS2026 グレーボックス",
+  "entry": "ms2026_greybox.tool",
+  "scripts": "maya/scripts",
+  "mayaVersion": "2026",
+  "requires": { "tdrive": "0.6.0" },
+  "compatibleWith": { "ms2026": "1.3.0" }
+}
