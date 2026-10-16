@@ -53,6 +53,9 @@ def install_menu():
     cmds.menuItem(MENU, label="MS2026", subMenu=True, tearOff=False)
     cmds.menuItem(label="グレーボックス...", command=RELOAD + "t.show_window()")
     cmds.menuItem(label="フォルダ設定...", command=RELOAD + "t.show_window()")
+    cmds.menuItem(label="トラス生成...",
+                  command=RELOAD + "import ms2026_maya_truss, ms2026_maya_ui_truss as u; "
+                                   "importlib.reload(ms2026_maya_truss); importlib.reload(u); u.show_window()")
     cmds.menuItem(divider=True)
     cmds.menuItem(label="シェルフを作成", command=RELOAD + "t.install_shelf()")
     cmds.setParent("..", menu=True)

@@ -104,6 +104,20 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 - 小物が 1 つも無い区画では、古い `.props.json` は削除される
 - Unity 側: 小物 FBX は `Tools > MS2026 > Map > Import Props`、区画は従来どおり `Import Background`
 
+## トラス生成（ライブ会場用）
+
+`Tools > MS2026 > トラス生成...` のウィンドウで、4 本弦のボックストラスをプロシージャルに作る（実装は `ms2026_maya_truss.py`、ウィンドウは `ms2026_maya_ui_truss.py`）。
+
+1. 作業グループ `SM_Bg_<区画>` を選ぶ（未選択だとエラー）
+2. 名前・種類（直線 / 門型）・寸法を入れて **生成**
+   - 直線: 長さ。門型: 幅（柱の外側どうし）と高さ（梁の上端）。グループ原点は床面の中央
+   - 共通: 断面サイズ（既定 30）、弦径（5）、セグメント長（100）。横桟・斜材径は 3、円周分割は弦 8 / 斜材 6（コードの `DEFAULT_PARAMS`）。単位 cm
+3. 作ったトラスを選んで寸法を変え **選択したトラスを再生成**（グループの文字列属性 `ms2026_truss` の JSON から子を作り直す）
+
+**コライダーの考え方: 部材 1 本（柱 1 本、梁 1 本）= `SC_` ノード 1 つ = Box 1 つ。** トラスは中が空洞だがゲーム上は内部に入れないので、弦・横桟・斜材は 1 メッシュに結合し、部材ごとに Box を 1 つ出す。門型は柱 2 + 梁 1 の 3 Box でコの字になる。各部材には文字列属性 `ms2026_collider_shape = "box"` が付き、`Export Block` の自動判定より優先される（`ms2026_maya_collision.py`。他の `SC_` にも使える: `box` / `sphere` / `capsule`）。
+
+構成: `SM_Bg_<区画>/SM_Truss_<名前>/SC_Truss_<名前>`（直線）、`SC_Truss_<名前>_PostL / _PostR / _Beam`（門型）。グループが `SM_Truss_` なのは `Check` が全 transform に `SM_`/`SC_`/`UCX_` を要求するため。コードからは `ms2026_maya_truss.build_gate(name, width, height, params, parent)` / `build_straight(name, length, params, parent)` / `rebuild(group)`。検証は `tests/verify_truss.py`（mayapy）。
+
 ## 関数
 
 | 関数 | 内容 |

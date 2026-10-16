@@ -12,6 +12,7 @@ import maya.cmds as cmds
 SIMPLE_PREFIXES = ("SC_", "NC_")  # NC_ は旧名 (当たり判定なし)。簡易当たり判定として扱う
 SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE = "box", "sphere", "capsule"
 EPS = 1e-4
+SHAPE_ATTR = "ms2026_collider_shape"  # ノードにこの文字列属性があれば自動判定より優先 ("box"/"sphere"/"capsule")
 
 # 判定のしきい値。頂点はすべて対象ノードのローカル空間 (cm)。
 SPHERE_EXTENT_RATIO = 0.9  # 3 軸の幅がこの比率以上で揃っていれば球の候補
@@ -125,12 +126,38 @@ def classify(pts):
     return entry
 
 
+def forced_shape(node):
+    """node の文字列属性 ms2026_collider_shape (box/sphere/capsule)。無い・不正なら None。"""
+    if not cmds.attributeQuery(SHAPE_ATTR, node=node, exists=True):
+        return None
+    val = (cmds.getAttr("{}.{}".format(node, SHAPE_ATTR)) or "").strip().lower()
+    return val if val in (SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE) else None
+
+
+def classify_forced(pts, shape):
+    """形を指定して AABB から寸法を決める。sphere は 3 軸の平均、capsule は最長軸が方向。"""
+    center, size = _bounds(pts) if pts else ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    entry = {"shape": SHAPE_BOX, "center": center, "size": size}
+    if shape == SHAPE_SPHERE:
+        entry.update(shape=SHAPE_SPHERE, radius=sum(size) / 6.0)
+    elif shape == SHAPE_CAPSULE:
+        axis = max(range(3), key=lambda i: size[i])
+        others = [size[i] for i in range(3) if i != axis]
+        entry.update(shape=SHAPE_CAPSULE, radius=sum(others) / 4.0, height=size[axis], direction=axis)
+    return entry
+
+
 def classify_node(node, shapes=None):
-    """node のローカル空間で簡易当たり判定を決める。shapes 省略で node 以下の全メッシュ (小物用)。"""
+    """node のローカル空間で簡易当たり判定を決める。shapes 省略で node 以下の全メッシュ (小物用)。
+    node に文字列属性 ms2026_collider_shape があれば、その形を優先して自動判定を飛ばす。"""
     node = cmds.ls(node, long=True)[0]
     if shapes is None:
         shapes = descendant_meshes(node)
-    return classify(local_vertices(node, shapes))
+    pts = local_vertices(node, shapes)
+    forced = forced_shape(node)
+    if forced:
+        return classify_forced(pts, forced)
+    return classify(pts)
 
 
 def relative_path(top, node):
