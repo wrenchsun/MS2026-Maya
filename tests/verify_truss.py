@@ -21,7 +21,7 @@ import ms2026_maya_tools as tools  # noqa: E402
 import ms2026_maya_truss as truss  # noqa: E402
 
 
-def near(a, b, tol=5.0):  # 斜材の端面が部材端から数 cm はみ出す分を許容
+def near(a, b, tol=1.0):  # build_member が端面をクランプするので ±1 cm
     return abs(a - b) <= tol
 
 
@@ -92,6 +92,8 @@ def main():
 
     verify_path(settings, tools)
     verify_snap(settings, tools)
+    verify_corner_arc_tower(settings, tools)
+    verify_detail_presets()
     print("VERIFY OK: boxes={} (gate 3 + straight 1) out={}".format(len(cols), out))
 
 
@@ -138,7 +140,8 @@ def verify_path(settings, tools):
     assert len(cols) == 3 and all(c["shape"] == "box" for c in cols), cols
     maxes = sorted(max(c["size"]) for c in cols)
     print("U boxes max axis:", [round(m, 1) for m in maxes])
-    assert all(abs(a - b) <= 10 for a, b in zip(maxes, [400, 400, 600])), maxes
+    # 角ブロック (既定 ON) は番号の若い部材の終点側に s/2 = 15 足す: 柱 1 本目 415 / 梁 615 / 柱 2 本目 400
+    assert all(abs(a - b) <= 1 for a, b in zip(maxes, [400, 415, 615])), maxes
 
     # --- CV を動かして rebuild -> 1 本目 (縦) が 400 -> 500
     first = [k for k in kids if k.endswith("SC_Truss_U_01")][0]
@@ -219,12 +222,12 @@ def verify_snap(settings, tools):
     grp = truss.build_path("Skew", pts, snap_angle=90, snap_grid=10)
     kids = _members(grp)
     assert len(kids) == 3, kids
-    expect = [400, 600, 400]
+    expect = [415, 615, 400]  # 角ブロックで 1・2 本目が終点側に 15 伸びる
     for k, e in zip(kids, expect):
         assert _axis_dot(k) > 0.999, (k, cmds.xform(k, q=True, ws=True, m=True))
         ext = _extent(k)
         print("snap U member {}: extent {:.1f} (expect {})".format(k.split("|")[-1], ext, e))
-        assert abs(ext - e) <= 5, (k, ext, e)
+        assert abs(ext - e) <= 1, (k, ext, e)
     info = truss.read_info(grp)
     assert info["snap_angle"] == 90 and info["snap_grid"] == 10, info
     assert info["points"] == [[-300, 0, 0], [-300, 400, 0], [300, 400, 0], [300, 0, 0]], info["points"]
@@ -246,7 +249,7 @@ def verify_snap(settings, tools):
     post = [k for k in _members(gu) if cmds.exactWorldBoundingBox(k)[4] - cmds.exactWorldBoundingBox(k)[1] > 300][0]
     ymin = cmds.exactWorldBoundingBox(post)[1]
     print("U post min y = {:.2f}".format(ymin))
-    assert abs(ymin) <= 2, ymin  # 斜材の端面が部材端から約 1.5 はみ出す分を許容
+    assert abs(ymin) <= 1, ymin
     for kind in ("line", "rect"):
         gk = truss.build_preset("Floor" + kind, kind, 600, 400)
         ymin = min(cmds.exactWorldBoundingBox(k)[1] for k in _members(gk))
@@ -339,11 +342,11 @@ def verify_snap(settings, tools):
     assert len(mem) == 3, mem
     assert cg.split("|")[-1] == "SM_Truss_ConvG"
     assert all(a == b for a, b in zip(pos, cmds.xform(cgg, q=True, ws=True, t=True))), pos
-    posts = [m for m in mem if abs(_ext(m, 1) - 400) <= 5]
+    posts = [m for m in mem if _ext(m, 1) > 390]
     assert len(posts) == 2, [(m, _ext(m, 1)) for m in mem]
     beam = [m for m in mem if m not in posts][0]
-    # 梁は柱の中心線間 (幅 600 - 断面 30 = 570)。+3 は斜材のはみ出し
-    assert near(_ext(beam, 0), 570), _ext(beam, 0)
+    # 梁は柱の中心線間 (幅 600 - 断面 30 = 570) + 角ブロック 15 (終点側)
+    assert near(_ext(beam, 0), 585), _ext(beam, 0)
     try:
         truss.convert_to_path(cgg)
         raise AssertionError("パスの変換でエラーにならない")
@@ -357,7 +360,7 @@ def verify_snap(settings, tools):
     cmds.xform(cs, ws=True, t=(0, 0, -300))
     truss.convert_to_path(cs)
     assert len(truss.read_info(cs)["points"]) == 2 and len(_members(cs)) == 1
-    assert near(_ext(_members(cs)[0], 0), 500, 5)
+    assert near(_ext(_members(cs)[0], 0), 500)
     assert cmds.xform(cs, q=True, ws=True, t=True) == [0.0, 0.0, -300.0]
 
     # --- プレビューは Undo 履歴に乗らない / 連番も消す / チャンクは 1 回の Undo
@@ -493,6 +496,187 @@ def verify_snap(settings, tools):
     assert len(truss.make_edit_points(gg)) == 4 and truss.read_info(gg)["kind"] == "path"
     print("edit points straight / gate OK")
     print("preview / convert_to_path OK")
+
+
+
+def verify_corner_arc_tower(settings, tools):
+    cmds.file(new=True, force=True)
+    cmds.currentUnit(linear="cm")
+    s = 30.0
+    # --- コーナーブロック: コの字 (4 点 3 部材)
+    top = cmds.group(empty=True, name="SM_Bg_CornerTest", world=True)
+    pts = [(-300, 0, 0), (-300, 400, 0), (300, 400, 0), (300, 0, 0)]
+    grp = truss.build_path("Cb", pts, parent=top, snap_angle=90, snap_grid=10)
+    assert truss.read_info(grp)["params"]["corner_block"] is True
+    ks = _members(grp)
+    on_max = [_extent(k) for k in ks]
+    print("corner_block ON  extents:", [round(v, 1) for v in on_max])
+    assert [round(v) for v in on_max] == [415, 615, 400], on_max
+    cols_on = _export(top, "CbOn")
+    assert len(cols_on) == 3, cols_on
+    truss.rebuild(grp, params={"corner_block": False})
+    ks = _members(grp)
+    off_max = [_extent(k) for k in ks]
+    print("corner_block OFF extents:", [round(v, 1) for v in off_max])
+    assert [round(v) for v in off_max] == [400, 600, 400], off_max
+    assert len(ks) == 3 and len(_export(top, "CbOff")) == 3
+    truss.rebuild(grp, params={"corner_block": True})
+    assert len(_members(grp)) == 3 and [round(_extent(k)) for k in _members(grp)] == [415, 615, 400]
+    # 閉パス (rect): 全 4 頂点にブロック。部材数は 4 のまま
+    gr = truss.build_preset("CbRect", "rect", 600, 400, snap_angle=90, snap_grid=10)
+    assert len(_members(gr)) == 4
+    ex = sorted(round(_extent(k)) for k in _members(gr))
+    print("rect corner extents:", ex)
+    # 頂点 0 の角は 1 本目の始点側、頂点 1-3 はそれぞれ 1-3 本目の終点側: 1 本目だけ 2 個 (430)、4 本目 (閉じるスパン) は 600 のまま
+    assert ex == [415, 430, 600, 615], ex
+
+    # --- 円弧 / 円
+    ap, closed = truss.arc_points(300, 360, 200)
+    assert len(ap) == 9 and closed is True and ap[0] != ap[-1], (len(ap), closed)
+    assert all(abs(p[1]) < 1e-6 for p in ap)
+    assert abs(math.hypot(ap[3][0], ap[3][2]) - 300) < 1e-3
+    gc = truss.build_arc("Circle", 300, 360, 200, snap_grid=0)
+    ic = truss.read_info(gc)
+    assert ic["kind"] == "path" and ic["closed"] is True and len(_members(gc)) == 9 and len(ic["points"]) == 9, ic
+    assert ic["arc"] == {"radius": 300.0, "angle": 360.0, "member_len": 200.0, "plane": "XZ"}, ic["arc"]
+    assert ic["snap_angle"] == 0
+    truss.rebuild(gc)
+    assert len(_members(gc)) == 9
+    ap, closed = truss.arc_points(300, 180, 200, plane="XY")
+    print("arch 180 XY: n={} y ends = {:.4f}, {:.4f} x ends = {:.1f}, {:.1f} top y = {:.1f}".format(
+        len(ap), ap[0][1], ap[-1][1], ap[0][0], ap[-1][0], max(p[1] for p in ap)))
+    assert closed is False and abs(ap[0][1]) < 1e-4 and abs(ap[-1][1]) < 1e-4 and min(p[1] for p in ap) > -1e-4
+    ga = truss.build_arc("Arch", 300, 180, 200, plane="XY", snap_grid=0)
+    assert len(_members(ga)) == len(ap) - 1 and truss.read_info(ga)["closed"] is False
+    ymin = min(cmds.exactWorldBoundingBox(k)[1] for k in _members(ga))
+    print("arch member min y = {:.2f}".format(ymin))
+    pa = truss.preview_points_for("arc", radius=300, angle=360, member_len=200, plane="XZ", snap_grid=0)
+    assert len(pa) == 1 and len(pa[0][0]) == 9 and pa[0][1]
+    assert truss.make_edit_points(gc) and len(truss.edit_locators(gc)) == 9
+
+    # --- 塔
+    top = cmds.group(empty=True, name="SM_Bg_TowerTest", world=True)
+    gt = truss.build_tower("Tower", 400, parent=top)
+    kids = _members(gt)
+    names = [k.split("|")[-1] for k in kids]
+    assert names == ["SC_Truss_Tower_Base", "SC_Truss_Tower_Post"], names
+    assert truss.read_info(gt)["kind"] == "tower"
+    base = [k for k in kids if k.endswith("_Base")][0]
+    post = [k for k in kids if k.endswith("_Post")][0]
+    bb = cmds.exactWorldBoundingBox(base)
+    bs = [round(bb[3 + i] - bb[i], 2) for i in range(3)]
+    pb = cmds.exactWorldBoundingBox(post)
+    ps = [round(pb[3 + i] - pb[i], 2) for i in range(3)]
+    print("tower base bbox:", bs, "min y", round(bb[1], 2), " post bbox:", ps, "y range", round(pb[1], 2), round(pb[4], 2))
+    assert bs == [100, 5, 100] and abs(bb[1]) < 1e-4, bs
+    assert abs(ps[1] - (400 + 60 * 0.5)) < 1 and abs(ps[0] - 40) < 1 and abs(ps[2] - 40) < 1, ps
+    assert not tools.check_selection([top]), tools.check_selection([top])
+    cols = _export(top, "Tower")
+    assert len(cols) == 2 and all(c["shape"] == "box" for c in cols), cols
+    for c in cols:
+        print("tower collider", c["path"].split("/")[-1], [round(v, 2) for v in c["size"]], [round(v, 2) for v in c["center"]])
+    truss.rebuild(gt, height=600, base_size=120)
+    ti = truss.read_info(gt)
+    assert ti["height"] == 600 and ti["base_size"] == 120 and len(_members(gt)) == 2
+    bb = cmds.exactWorldBoundingBox([k for k in _members(gt) if k.endswith("_Base")][0])
+    assert abs((bb[3] - bb[0]) - 120) < 1e-3
+    try:
+        truss.convert_to_path(gt)
+        raise AssertionError("塔のパス変換でエラーにならない")
+    except ValueError as e:
+        assert "塔はパスに変換できません" in str(e)
+    pt = truss.preview_points_for("tower", height=400)
+    assert len(pt) == 2 and len(pt[0][0]) == 2 and len(pt[1][0]) == 4 and pt[1][1]
+    print("corner / arc / tower OK")
+
+
+def _mesh_verts(node):
+    return cmds.polyEvaluate(node, vertex=True)
+
+
+def verify_detail_presets():
+    import ms2026_maya_truss_presets as pr
+    import ms2026_maya_reload
+    assert "ms2026_maya_truss_presets" in sys.modules and ms2026_maya_reload.PREFIX == "ms2026_maya_"
+    cmds.file(new=True, force=True)
+    # ladder は斜材が無いので頂点が少なく、Box size は zigzag と同じ
+    zz = truss.build_member("Zig", 500, {"brace_pattern": "zigzag"})
+    ld = truss.build_member("Lad", 500, {"brace_pattern": "ladder"})
+    vz, vl = _mesh_verts(zz), _mesh_verts(ld)
+    print("zigzag verts:", vz, "ladder verts:", vl)
+    assert vl < vz, (vl, vz)
+    for node in (zz, ld):
+        bb = cmds.exactWorldBoundingBox(node)
+        size = (bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+        assert all(near(a, b) for a, b in zip(size, (500, 30, 30))), (node, size)
+    try:
+        truss.make_params({"brace_pattern": "x"})
+        raise AssertionError("不正な brace_pattern でエラーにならない")
+    except ValueError:
+        pass
+    # 円周分割を変えても生成でき、Box size は同じ。頂点数は分割に応じて変わる
+    dv = truss.build_member("Div", 500, {"chord_div": 12, "brace_div": 8})
+    bb = cmds.exactWorldBoundingBox(dv)
+    size = (bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2])
+    assert all(near(a, b) for a, b in zip(size, (500, 30, 30))), size
+    assert _mesh_verts(dv) > vz
+    # グループ経由 + rebuild で params が反映される
+    g = truss.build_straight("Det", 500, {"brace_pattern": "ladder", "chord_div": 12, "brace_div": 8})
+    info = truss.read_info(g)["params"]
+    assert info["brace_pattern"] == "ladder" and info["chord_div"] == 12 and info["brace_div"] == 8, info
+    n0 = _mesh_verts(cmds.listRelatives(g, children=True, fullPath=True)[0])
+    truss.rebuild(g, params={"brace_pattern": "zigzag"})
+    n1 = _mesh_verts(cmds.listRelatives(g, children=True, fullPath=True)[0])
+    assert n1 > n0 and truss.read_info(g)["params"]["brace_pattern"] == "zigzag", (n0, n1)
+    print("detail params OK")
+
+    # プリセット: optionVar を退避して検証し、最後に戻す
+    key = pr.OPT_PRESETS
+    had = cmds.optionVar(exists=key)
+    saved = cmds.optionVar(q=key) if had else None
+    try:
+        cmds.optionVar(remove=key)
+        builtin = pr.list_presets()
+        assert builtin == list(pr.BUILTIN) and len(builtin) == 4, builtin
+        vals = {"kind": "arc", "width": 123.5, "chord_div": 12, "brace_pattern": "ladder", "snap_angle": None,
+                "closed": True, "corner_block": False}
+        assert pr.save_preset("  マイ検証  ", vals) == "マイ検証"
+        assert pr.list_presets() == builtin + ["マイ検証"]
+        assert pr.load_preset("マイ検証") == vals
+        vals2 = dict(vals, width=9.0)
+        pr.save_preset("マイ検証", vals2)  # 上書き
+        assert pr.load_preset("マイ検証") == vals2 and pr.list_presets().count("マイ検証") == 1
+        for bad in ("", "   "):
+            try:
+                pr.save_preset(bad, vals)
+                raise AssertionError("空の名前で保存できた")
+            except ValueError:
+                pass
+        pr.delete_preset("マイ検証")
+        assert "マイ検証" not in pr.list_presets()
+        try:
+            pr.load_preset("マイ検証")
+            raise AssertionError("削除後に読めた")
+        except KeyError:
+            pass
+        for b in pr.BUILTIN:
+            try:
+                pr.delete_preset(b)
+                raise AssertionError("組み込みが削除できた: " + b)
+            except ValueError:
+                pass
+            v = pr.load_preset(b)  # 組み込みの値はそのまま生成に使える
+            truss.make_params({k: v[k] for k in ("section", "chord_dia", "brace_dia", "seg_len", "chord_div",
+                                                 "brace_div", "brace_pattern", "corner_block")})
+        assert pr.load_preset("塔 400")["kind"] == "tower"
+        cmds.optionVar(stringValue=(key, "{壊れた"))  # 壊れた JSON でも落ちない
+        assert pr.list_presets() == builtin
+    finally:
+        if had:
+            cmds.optionVar(stringValue=(key, saved))
+        else:
+            cmds.optionVar(remove=key)
+    print("presets OK")
 
 
 ok = False

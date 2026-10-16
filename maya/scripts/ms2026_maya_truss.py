@@ -21,7 +21,10 @@ DEFAULT_PARAMS = {
     "seg_len": 100.0,     # セグメント長 (目安。長さを整数分割に丸める)
     "chord_div": 8,       # 弦の円周分割
     "brace_div": 6,       # 斜材・横桟の円周分割
+    "corner_block": True,  # 門型・パスの角に断面サイズの立方体ブロックを足す
+    "brace_pattern": "zigzag",  # "zigzag" (横桟 + ジグザグの斜材) / "ladder" (横桟だけ。間隔は seg_len)
 }
+BRACE_PATTERNS = ("zigzag", "ladder")
 
 
 def make_params(params=None):
@@ -29,6 +32,11 @@ def make_params(params=None):
     p.update({k: v for k, v in (params or {}).items() if k in DEFAULT_PARAMS and v is not None})
     if p["section"] <= p["chord_dia"] or p["chord_dia"] <= 0 or p["brace_dia"] <= 0 or p["seg_len"] <= 0:
         raise ValueError("トラスの寸法が不正です: {}".format(p))
+    if p["brace_pattern"] not in BRACE_PATTERNS:
+        raise ValueError("斜材パターンは {} のどれかです: {}".format(" / ".join(BRACE_PATTERNS), p["brace_pattern"]))
+    p["chord_div"], p["brace_div"] = int(p["chord_div"]), int(p["brace_div"])
+    if p["chord_div"] < 3 or p["brace_div"] < 3:
+        raise ValueError("円周分割は 3 以上にしてください: {}".format(p))
     return p
 
 
@@ -48,9 +56,32 @@ def _cyl_between(p0, p1, dia, div, name):
     return tr
 
 
-def build_member(name, length, params=None, parent=None):
+def _clamp_x(node, half):
+    """node のメッシュの頂点のうちローカル X が ±half を超えるものを ±half に寄せる (斜材・横桟の端面のはみ出し除去)。"""
+    shape = cmds.listRelatives(node, shapes=True, fullPath=True, type="mesh")[0]
+    sel = om.MSelectionList()
+    sel.add(shape)
+    fn = om.MFnMesh(sel.getDagPath(0))
+    pts = fn.getPoints(om.MSpace.kObject)
+    for i in range(len(pts)):
+        pt = pts[i]
+        if pt.x > half:
+            pt.x = half
+        elif pt.x < -half:
+            pt.x = -half
+        else:
+            continue
+        pts[i] = pt
+    fn.setPoints(pts, om.MSpace.kObject)
+    fn.updateSurface()
+
+
+def build_member(name, length, params=None, parent=None, extra_boxes=()):
     """4 本弦のボックストラス部材 1 本。ローカル +X が長さ方向、ピボットは中心。
-    名前は SC_<name>。ms2026_collider_shape = "box"。戻り値: transform (long 名)。"""
+    名前は SC_<name>。ms2026_collider_shape = "box"。戻り値: transform (long 名)。
+    部材端 (ローカル X = ±length/2) を超える斜材・横桟の端面はクランプして寸法を length x section x section に揃える。
+    extra_boxes: [((cx, cy, cz), (sx, sy, sz)), ...] 部材ローカル空間の直方体 (角ブロック・スリーブ)。クランプの後で結合する
+    (意図してはみ出す)。"""
     p = make_params(params)
     if length <= p["section"]:
         raise ValueError("長さ({})は断面({})より長くしてください".format(length, p["section"]))
@@ -67,7 +98,7 @@ def build_member(name, length, params=None, parent=None):
         for i in range(4):
             (ya, za), (yb, zb) = corners[i], corners[(i + 1) % 4]
             parts.append(_cyl_between((x, ya, za), (x, yb, zb), bd, p["brace_div"], "tmpRung"))
-    for k in range(n):  # 斜材: 各面・各セグメントでジグザグ
+    for k in range(n if p["brace_pattern"] == "zigzag" else 0):  # 斜材: 各面・各セグメントでジグザグ (ladder は無し)
         xa, xb = x0 + step * k, x0 + step * (k + 1)
         for i in range(4):
             (ya, za), (yb, zb) = corners[i], corners[(i + 1) % 4]
@@ -81,6 +112,18 @@ def build_member(name, length, params=None, parent=None):
     leftovers = [x for x in parts if cmds.objExists(x)]
     if leftovers:
         cmds.delete(leftovers)
+    _clamp_x(united, length * 0.5)
+    if extra_boxes:
+        boxes = []
+        for (cx, cy, cz), (sx, sy, sz) in extra_boxes:
+            b = cmds.polyCube(width=sx, height=sy, depth=sz, name="tmpBlock", constructionHistory=False)[0]
+            cmds.xform(b, ws=True, t=(cx, cy, cz))
+            boxes.append(b)
+        united = cmds.polyUnite([united] + boxes, constructionHistory=False, mergeUVSets=1, name="tmpMember2")[0]
+        cmds.delete(united, constructionHistory=True)
+        leftovers = [x for x in boxes if cmds.objExists(x)]
+        if leftovers:
+            cmds.delete(leftovers)
     cmds.xform(united, ws=True, pivots=(0, 0, 0))
     node = cmds.rename(united, "SC_" + _name(name))
     cmds.addAttr(node, longName=SHAPE_ATTR, dataType="string")
@@ -114,7 +157,9 @@ def _fill_gate(grp, name, width, height, params):
     base = "Truss_" + _name(name)
     out = []
     for side, sign in (("PostL", -1), ("PostR", 1)):
-        post = build_member("{}_{}".format(base, side), height, p, parent=grp)
+        # 角ブロックは柱の上端の内側 (柱の寸法は変えない。梁との接合部を埋める)
+        blocks = [((height * 0.5 - s * 0.5, 0.0, 0.0), (s, s, s))] if p["corner_block"] else ()
+        post = build_member("{}_{}".format(base, side), height, p, parent=grp, extra_boxes=blocks)
         cmds.setAttr(post + ".rotateZ", 90)
         cmds.setAttr(post + ".translate", sign * (width * 0.5 - s * 0.5), height * 0.5, 0)
         out.append(post)
@@ -254,6 +299,24 @@ def preset_points(kind, width, height, plane="XY", section=0.0):
     return pts, kind == "rect"
 
 
+def _corner_assignments(n_pts, n_spans, closed, valid):
+    """角ブロックを結合する部材の割り当て。戻り値: {スパン番号: ["start" / "end", ...]}。
+    頂点 k (閉パスは全頂点、開パスは両端を除く内部頂点) の角は、隣り合う 2 スパンのうち番号の若い方に付ける
+    (頂点 k >= 1 はスパン k-1 の終点側、閉パスの頂点 0 はスパン 0 の始点側)。若い方が作られない (短すぎる) ときはもう一方。"""
+    out = {}
+    verts = range(n_pts) if closed else range(1, n_pts - 1)
+    for k in verts:
+        if k == 0:
+            cands = [(0, "start"), (n_spans - 1, "end")]
+        else:
+            cands = [(k - 1, "end"), (k, "start")]
+        for span, e in cands:
+            if span < n_spans and valid[span]:
+                out.setdefault(span, []).append(e)
+                break
+    return out
+
+
 def _fill_path(grp, name, points, closed, params):
     pts = [tuple(float(v) for v in p) for p in points]
     if len(pts) < 2:
@@ -266,12 +329,17 @@ def _fill_path(grp, name, points, closed, params):
     out = []
     min_len = make_params(params)["section"]
     skipped = 0
+    lengths = [math.sqrt(sum((q - r) ** 2 for q, r in zip(a, b))) for a, b in spans]
+    mp = make_params(params)
+    ends = _corner_assignments(len(pts), len(spans), closed and len(pts) > 2, [l > min_len for l in lengths])         if mp["corner_block"] else {}
+    sec = mp["section"]
     for i, (a, b) in enumerate(spans):
-        length = math.sqrt(sum((q - r) ** 2 for q, r in zip(a, b)))
+        length = lengths[i]
         if length <= min_len:  # build_member の長さ制約未満はスキップ
             skipped += 1
             continue
-        m = build_member("{}_{:0{}d}".format(base, i + 1, digits), length, params, parent=grp)
+        blocks = [(((-1.0 if e == "start" else 1.0) * length * 0.5, 0.0, 0.0), (sec, sec, sec)) for e in ends.get(i, ())]
+        m = build_member("{}_{:0{}d}".format(base, i + 1, digits), length, params, parent=grp, extra_boxes=blocks)
         cmds.xform(m, matrix=_basis_matrix(a, b))  # 親 (グループ) のローカル空間
         out.append(m)
     if skipped:
@@ -282,7 +350,7 @@ def _fill_path(grp, name, points, closed, params):
 
 
 def build_path(name, points, params=None, parent=None, closed=False, source_curve=None, member_len=None,
-               snap_angle=DEFAULT_SNAP_ANGLE, snap_grid=DEFAULT_SNAP_GRID):
+               snap_angle=DEFAULT_SNAP_ANGLE, snap_grid=DEFAULT_SNAP_GRID, extra_info=None):
     """点列 points (cm、生成先グループのローカル空間) を結ぶ部材列。2 点ごとに 1 部材 (SC_Truss_<name>_01, _02, ...)。
     closed=True なら最後と最初も結ぶ。コーナーでは部材どうしが重なってよい。
     snap_angle (0/45/90) と snap_grid (cm) で点を揃えてから作り、JSON に保存する (再生成でも適用)。戻り値: グループ (long 名)。"""
@@ -294,6 +362,8 @@ def build_path(name, points, params=None, parent=None, closed=False, source_curv
             "snap_angle": snap_angle, "snap_grid": snap_grid}
     if member_len is not None:
         dims["member_len"] = float(member_len)
+    if extra_info:
+        dims.update(extra_info)
     grp = _new_group("path", name, dims, p, parent)
     try:
         _fill_path(grp, name, pts, bool(closed), p)
@@ -323,6 +393,92 @@ def build_preset(name, kind, width, height, params=None, parent=None, plane="XY"
     section = make_params(params)["section"]
     pts, closed, grid = _preset_final(kind, width, height, plane, section, snap_angle, snap_grid)
     return build_path(name, pts, params, parent, closed=closed, snap_angle=snap_angle, snap_grid=grid)
+
+
+# ---------------------------------------------------------------- 円弧 / 円
+
+def arc_points(radius, angle_deg, member_len, start_deg=0.0, plane="XZ", center=(0.0, 0.0, 0.0)):
+    """円弧 (折れ線近似) の点列。戻り値: (points, closed)。angle_deg >= 360 は円 (closed=True、始点を重複させない)。
+    分割数 = max(2, round(弧長 / member_len)) (円は 3 以上)。plane: "XZ" 床面 (y=center.y、角度は +X から +Z へ) /
+    "XY" 立面 (角度は +X から +Y へ)。XY で 180 度以下の円弧 (アーチ) は頂点が真上に来て両端が床 (y=center.y) に
+    なるよう、始点を 90 - angle/2 + start_deg、中心を radius*cos(angle/2) だけ下げる (start_deg はそこからの回転)。"""
+    plane = str(plane).upper()
+    if plane not in ("XY", "XZ"):
+        raise ValueError("平面は XY / XZ です: {}".format(plane))
+    if radius <= 0 or angle_deg <= 0 or member_len <= 0:
+        raise ValueError("半径・角度・部材長は正の値にしてください: {} / {} / {}".format(radius, angle_deg, member_len))
+    angle = min(float(angle_deg), 360.0)
+    full = angle >= 360.0 - 1e-9
+    n = max(2, int(round(radius * math.radians(angle) / member_len)))
+    if full:
+        n = max(3, n)
+    cx, cy, cz = (float(v) for v in center)
+    start = float(start_deg)
+    if plane == "XY" and not full and angle <= 180.0:
+        start += 90.0 - angle * 0.5
+        cy -= radius * math.cos(math.radians(angle * 0.5))
+    pts = []
+    for i in range(n if full else n + 1):
+        a = math.radians(start + angle * i / n)
+        c, sn = radius * math.cos(a), radius * math.sin(a)
+        pts.append([cx + c, cy, cz + sn] if plane == "XZ" else [cx + c, cy + sn, cz])
+    return [[round(v, 6) + 0.0 for v in p] for p in pts], full
+
+
+def build_arc(name, radius, angle_deg, member_len, params=None, parent=None, plane="XZ", start_deg=0.0,
+              center=(0.0, 0.0, 0.0), snap_angle=0, snap_grid=DEFAULT_SNAP_GRID):
+    """円弧 / 円のパストラス (arc_points + build_path)。JSON に arc: {radius, angle, member_len, plane} も保存 (情報のみ。
+    形は points が正)。戻り値: グループ (long 名)。"""
+    pts, closed = arc_points(radius, angle_deg, member_len, start_deg, plane, center)
+    return build_path(name, pts, params, parent, closed=closed, member_len=member_len,
+                      snap_angle=0 if snap_angle is None else snap_angle, snap_grid=snap_grid,
+                      extra_info={"arc": {"radius": float(radius), "angle": float(angle_deg),
+                                          "member_len": float(member_len), "plane": str(plane).upper()}})
+
+
+# ---------------------------------------------------------------- 塔 (グランドサポート)
+
+def _check_tower(height, params, base_size, base_thickness, sleeve_height):
+    s = make_params(params)["section"]
+    if height <= s or base_thickness <= 0 or sleeve_height <= 0 or base_size < s + 10:
+        raise ValueError("塔の寸法が不正です: 高さ({})は断面({})より大きく、ベース幅({})は断面+10 以上、"
+                         "ベース厚({})・スリーブ高({})は正の値にしてください".format(height, s, base_size, base_thickness, sleeve_height))
+
+
+def _fill_tower(grp, name, height, params, base_size, base_thickness, sleeve_height):
+    p = make_params(params)
+    _check_tower(height, p, base_size, base_thickness, sleeve_height)
+    s = p["section"]
+    base = "Truss_" + _name(name)
+    # 柱: トラス (長さ height、ローカル +X = 上) + 上端に被せるスリーブ (断面 + 10、トラス上端を中心に高さ sleeve_height)
+    sleeve = [((height * 0.5, 0.0, 0.0), (sleeve_height, s + 10.0, s + 10.0))]
+    post = build_member(base + "_Post", height, p, parent=grp, extra_boxes=sleeve)
+    cmds.setAttr(post + ".rotateZ", 90)
+    cmds.setAttr(post + ".translate", 0, base_thickness + height * 0.5, 0)
+    plate = cmds.polyCube(width=base_size, height=base_thickness, depth=base_size,
+                          name="SC_" + base + "_Base", constructionHistory=False)[0]
+    cmds.addAttr(plate, longName=SHAPE_ATTR, dataType="string")
+    cmds.setAttr(plate + "." + SHAPE_ATTR, "box", type="string")
+    plate = cmds.parent(plate, grp)[0]
+    cmds.setAttr(plate + ".translate", 0, base_thickness * 0.5, 0)
+    return [post, plate]
+
+
+def build_tower(name, height, params=None, parent=None, base_size=100.0, base_thickness=5.0, sleeve_height=60.0):
+    """グランドサポート (塔)。グループ SM_Truss_<name> の下に SC_Truss_<name>_Post (垂直トラス + 上端のスリーブ、Box 1 つ) と
+    SC_Truss_<name>_Base (床のベースプレート base_size x base_thickness x base_size、y=0 から上、Box 1 つ)。
+    トラスは y=base_thickness から height、スリーブはトラス上端を中心に sleeve_height (上へ半分はみ出す)。
+    グループ原点は床面の中央。戻り値: グループ (long 名)。"""
+    p = make_params(params)
+    _check_tower(height, p, base_size, base_thickness, sleeve_height)
+    grp = _new_group("tower", name, {"height": height, "base_size": base_size, "base_thickness": base_thickness,
+                                     "sleeve_height": sleeve_height}, p, parent)
+    try:
+        _fill_tower(grp, name, height, p, base_size, base_thickness, sleeve_height)
+    except Exception:
+        cmds.delete(grp)
+        raise
+    return grp
 
 
 def points_from_selection():
@@ -666,7 +822,7 @@ def edit_points_preview(group, snap_angle=None, snap_grid=None):
 
 def rebuild(group, **overrides):
     """グループの ms2026_truss JSON から子を消して同じ場所に再生成する。グループ自身の位置・回転は保つ。
-    overrides: length / width / height / params(dict) で寸法を差し替えられる (JSON も更新)。
+    overrides: length / width / height / params(dict) で寸法を差し替えられる (JSON も更新。塔は base_size / base_thickness / sleeve_height も)。
     パス種別: member_len / closed / snap_angle / snap_grid も可 (点列にスナップを適用して保存)。source_curve のカーブが残っていれば再サンプルして点列を更新、
     無ければ保存した points から再生成する (編集用の点 = edit_points のロケータがあれば最優先)。グループ内の手動編集は失われる。戻り値: グループ。"""
     if not is_truss_group(group):
@@ -674,7 +830,7 @@ def rebuild(group, **overrides):
     group = cmds.ls(group, long=True)[0]
     info = read_info(group)
     params = make_params(dict(info.get("params", {}), **(overrides.pop("params", None) or {})))
-    for k in ("length", "width", "height"):
+    for k in ("length", "width", "height", "base_size", "base_thickness", "sleeve_height"):
         if overrides.get(k) is not None:
             info[k] = overrides[k]
     info["params"] = params
@@ -710,6 +866,9 @@ def rebuild(group, **overrides):
         _fill_gate(group, info["name"], info["width"], info["height"], params)
     elif info["kind"] == "path":
         _fill_path(group, info["name"], info["points"], info["closed"], params)
+    elif info["kind"] == "tower":
+        _fill_tower(group, info["name"], info["height"], params, info["base_size"], info["base_thickness"],
+                    info["sleeve_height"])
     else:
         raise ValueError("未知のトラス種別: {}".format(info["kind"]))
     _write_info(group, info)
@@ -748,6 +907,8 @@ def convert_to_path(group):
         pts = _gate_path_points(info["width"], info["height"], p["section"])
     elif kind == "path":
         raise ValueError("すでにパスです: {}".format(group))
+    elif kind == "tower":
+        raise ValueError("塔はパスに変換できません: {}".format(group))
     else:
         raise ValueError("未知のトラス種別: {}".format(kind))
     new = {"kind": "path", "name": info["name"], "points": pts, "closed": False, "source_curve": None,
@@ -765,15 +926,17 @@ def convert_to_path(group):
 PREVIEW_GROUP = "MS2026_TrussPreviewGrp"
 PREVIEW_NAME = "MS2026_TrussPreview"
 PREVIEW_COLOR = 17  # 黄
-PREVIEW_KINDS = ("straight", "gate", "path", "preset", "points")
+PREVIEW_KINDS = ("straight", "gate", "path", "preset", "points", "arc", "tower")
 
 
 def preview_points_for(kind, params=None, length=500.0, width=600.0, height=400.0, shape="U", plane="XY",
                        curve=None, member_len=DEFAULT_MEMBER_LEN, world_points=None, closed=False,
-                       snap_angle=None, snap_grid=DEFAULT_SNAP_GRID, parent=None):
+                       snap_angle=None, snap_grid=DEFAULT_SNAP_GRID, parent=None,
+                       radius=300.0, angle=360.0, base_size=100.0, base_thickness=5.0, sleeve_height=60.0):
     """生成したときの部材中心線を [(points, closed), ...] で返す (点は parent のローカル空間、スナップ適用済み)。
     kind: "straight" (1 本) / "gate" (柱 2 + 梁 1 の 3 本) / "path" (curve から) / "preset" (shape, plane) /
-    "points" (world_points を parent のローカルへ)。snap_angle=None は自動 (path は degree 1 なら 90、滑らかなら 0。
+    "points" (world_points を parent のローカルへ) / "arc" (radius, angle, member_len, plane) /
+    "tower" (height の柱の中心線 1 本 + base_size のベースの正方形)。snap_angle=None は自動 (path は degree 1 なら 90、滑らかなら 0。
     preset / points は 90)。生成と同じ検証をして、不正なら ValueError。"""
     p = make_params(params)
     s = p["section"]
@@ -788,7 +951,15 @@ def preview_points_for(kind, params=None, length=500.0, width=600.0, height=400.
         return [([[-x, 0.0, 0.0], [-x, float(height), 0.0]], False),
                 ([[x, 0.0, 0.0], [x, float(height), 0.0]], False),
                 ([[-(width * 0.5 - s), height - s * 0.5, 0.0], [width * 0.5 - s, height - s * 0.5, 0.0]], False)]
+    if kind == "tower":
+        _check_tower(height, p, base_size, base_thickness, sleeve_height)
+        hb = base_size * 0.5
+        return [([[0.0, base_thickness, 0.0], [0.0, base_thickness + float(height), 0.0]], False),
+                ([[-hb, 0.0, -hb], [hb, 0.0, -hb], [hb, 0.0, hb], [-hb, 0.0, hb]], True)]
     grid = DEFAULT_SNAP_GRID if snap_grid is None else float(snap_grid)
+    if kind == "arc":
+        pts, c = arc_points(radius, angle, member_len, plane="XZ" if plane is None else plane)
+        return [(snap_points(pts, c, 0 if snap_angle is None else int(snap_angle), grid), c)]
     if kind == "path":
         if curve is None:
             raise ValueError("カーブを選択してください")

@@ -10,18 +10,25 @@ F_MEMBER, F_CLOSED = "MS2026TrussMemberLen", "MS2026TrussClosed"
 F_SHAPE, F_PLANE = "MS2026TrussShape", "MS2026TrussPlane"
 F_ANGLE, F_GRID = "MS2026TrussSnapAngle", "MS2026TrussSnapGrid"
 F_PREVIEW = "MS2026TrussPreview"
+F_RADIUS, F_ARCANGLE, F_CORNER = "MS2026TrussRadius", "MS2026TrussArcAngle", "MS2026TrussCorner"
 OPT_PREVIEW = "ms2026_truss_preview"
+F_DIA, F_CHORDDIV, F_BRACEDIV, F_PATTERN = ("MS2026TrussBraceDia", "MS2026TrussChordDiv", "MS2026TrussBraceDiv",
+                                           "MS2026TrussPattern")
+F_PRESET = "MS2026TrussPresetMenu"
+PATTERNS = ("zigzag", "ladder")  # 斜材パターンメニューの並び (ジグザグ / ラダー)
 
-K_STRAIGHT, K_GATE, K_PATH, K_PRESET, K_POINTS = 1, 2, 3, 4, 5  # 種類メニューの選択番号
+K_STRAIGHT, K_GATE, K_PATH, K_PRESET, K_POINTS, K_ARC, K_TOWER = 1, 2, 3, 4, 5, 6, 7  # 種類メニューの選択番号
 SHAPES = ("line", "L", "U", "rect")
 PLANES = ("XY", "XZ")
-KIND_KEYS = {K_STRAIGHT: "straight", K_GATE: "gate", K_PATH: "path", K_PRESET: "preset", K_POINTS: "points"}
+KIND_KEYS = {K_STRAIGHT: "straight", K_GATE: "gate", K_PATH: "path", K_PRESET: "preset", K_POINTS: "points", K_ARC: "arc", K_TOWER: "tower"}
 HINTS = {
     K_STRAIGHT: "直線: 長さを入れて生成。原点は部材の中心",
     K_GATE: "門型: 幅（柱の外側どうし）と高さ（梁の上端）を入れる。原点は床面の中央",
     K_PATH: "パス（カーブから）: カーブを 1 本選ぶ。角のあるカーブはそのまま、滑らかなカーブは部材長で分割",
     K_PRESET: "形プリセット: 形・平面・幅・高さを選ぶ。直角にスナップされる",
     K_POINTS: "選択した点から: ロケータ等を順に選ぶ（2 個以上）",
+    K_ARC: "円弧 / 円: 半径・角度（360 = 円）・部材長・平面（床面 XZ = リング / 立面 XY = アーチ）を入れる",
+    K_TOWER: "塔（グランドサポート）: 高さとベース幅を入れる。原点は床面の中央。柱 + ベースプレートの Box 2 つ",
 }
 ANGLES = (None, 0, 45, 90)  # 角度メニュー: 自動 / なし / 45° / 90°。自動 = None (ポリライン 90、滑らかなカーブ 0)
 
@@ -75,11 +82,14 @@ def _guard(fn):
 
 
 def _params():
-    t = _truss()
     return {"section": cmds.floatFieldGrp(F_SECTION, q=True, value1=True),
             "chord_dia": cmds.floatFieldGrp(F_CHORD, q=True, value1=True),
             "seg_len": cmds.floatFieldGrp(F_SEG, q=True, value1=True),
-            "brace_dia": t.DEFAULT_PARAMS["brace_dia"]}
+            "brace_dia": cmds.floatFieldGrp(F_DIA, q=True, value1=True),
+            "chord_div": max(4, min(16, cmds.intFieldGrp(F_CHORDDIV, q=True, value1=True))),
+            "brace_div": max(3, min(12, cmds.intFieldGrp(F_BRACEDIV, q=True, value1=True))),
+            "brace_pattern": PATTERNS[cmds.optionMenu(F_PATTERN, q=True, select=True) - 1],
+            "corner_block": cmds.checkBox(F_CORNER, q=True, value=True)}
 
 
 def _kind():
@@ -105,16 +115,111 @@ def _is_points():
 def _on_kind(*_):
     k = _kind()
     cmds.floatFieldGrp(F_LEN, edit=True, enable=k == K_STRAIGHT)
-    cmds.floatFieldGrp(F_MEMBER, edit=True, enable=k == K_PATH)
+    cmds.floatFieldGrp(F_MEMBER, edit=True, enable=k in (K_PATH, K_ARC))
+    cmds.floatFieldGrp(F_RADIUS, edit=True, enable=k == K_ARC)
+    cmds.floatFieldGrp(F_ARCANGLE, edit=True, enable=k == K_ARC)
     cmds.checkBox(F_CLOSED, edit=True, enable=k in (K_PATH, K_POINTS))
-    cmds.floatFieldGrp(F_WIDTH, edit=True, enable=k in (K_GATE, K_PRESET))
-    cmds.floatFieldGrp(F_HEIGHT, edit=True, enable=k in (K_GATE, K_PRESET))
+    cmds.floatFieldGrp(F_WIDTH, edit=True, enable=k in (K_GATE, K_PRESET, K_TOWER))
+    cmds.floatFieldGrp(F_HEIGHT, edit=True, enable=k in (K_GATE, K_PRESET, K_TOWER))
     cmds.optionMenu(F_SHAPE, edit=True, enable=k == K_PRESET)
-    cmds.optionMenu(F_PLANE, edit=True, enable=k == K_PRESET)
-    cmds.optionMenu(F_ANGLE, edit=True, enable=k in (K_PATH, K_PRESET, K_POINTS))
-    cmds.floatFieldGrp(F_GRID, edit=True, enable=k in (K_PATH, K_PRESET, K_POINTS))
+    cmds.optionMenu(F_PLANE, edit=True, enable=k in (K_PRESET, K_ARC))
+    cmds.optionMenu(F_ANGLE, edit=True, enable=k in (K_PATH, K_PRESET, K_POINTS, K_ARC))
+    cmds.floatFieldGrp(F_GRID, edit=True, enable=k in (K_PATH, K_PRESET, K_POINTS, K_ARC))
     _status(HINTS.get(k, ""))
     _update_preview()
+
+
+def _presets():
+    import ms2026_maya_truss_presets as pr
+    return pr
+
+
+def _collect_values():
+    """UI の全入力を dict に (プリセット保存用)。"""
+    angle, grid = _snap()
+    v = {"kind": KIND_KEYS[_kind()],
+         "length": cmds.floatFieldGrp(F_LEN, q=True, value1=True),
+         "width": cmds.floatFieldGrp(F_WIDTH, q=True, value1=True),
+         "height": cmds.floatFieldGrp(F_HEIGHT, q=True, value1=True),
+         "snap_angle": angle, "snap_grid": grid,
+         "plane": PLANES[cmds.optionMenu(F_PLANE, q=True, select=True) - 1],
+         "shape": SHAPES[cmds.optionMenu(F_SHAPE, q=True, select=True) - 1],
+         "radius": cmds.floatFieldGrp(F_RADIUS, q=True, value1=True),
+         "arc_angle": cmds.floatFieldGrp(F_ARCANGLE, q=True, value1=True),
+         "member_len": cmds.floatFieldGrp(F_MEMBER, q=True, value1=True),
+         "closed": cmds.checkBox(F_CLOSED, q=True, value=True)}
+    v.update(_params())
+    return v
+
+
+def _apply_values(v):
+    """プリセットの値を全コントロールに入れる (欠けたキーは今の値のまま)。種類の enable 切替とプレビューは最後に 1 回。"""
+    keys = {val: k for k, val in KIND_KEYS.items()}
+    if v.get("kind") in keys:
+        cmds.optionMenu(F_KIND, edit=True, select=keys[v["kind"]])
+    for key, field in (("length", F_LEN), ("width", F_WIDTH), ("height", F_HEIGHT), ("radius", F_RADIUS),
+                       ("arc_angle", F_ARCANGLE), ("member_len", F_MEMBER), ("snap_grid", F_GRID),
+                       ("section", F_SECTION), ("chord_dia", F_CHORD), ("seg_len", F_SEG), ("brace_dia", F_DIA)):
+        if v.get(key) is not None:
+            cmds.floatFieldGrp(field, edit=True, value1=float(v[key]))
+    for key, field in (("chord_div", F_CHORDDIV), ("brace_div", F_BRACEDIV)):
+        if v.get(key) is not None:
+            cmds.intFieldGrp(field, edit=True, value1=int(v[key]))
+    if "snap_angle" in v:
+        cmds.optionMenu(F_ANGLE, edit=True, select=ANGLES.index(v["snap_angle"]) + 1 if v["snap_angle"] in ANGLES else 1)
+    if v.get("plane") in PLANES:
+        cmds.optionMenu(F_PLANE, edit=True, select=PLANES.index(v["plane"]) + 1)
+    if v.get("shape") in SHAPES:
+        cmds.optionMenu(F_SHAPE, edit=True, select=SHAPES.index(v["shape"]) + 1)
+    if v.get("brace_pattern") in PATTERNS:
+        cmds.optionMenu(F_PATTERN, edit=True, select=PATTERNS.index(v["brace_pattern"]) + 1)
+    if v.get("corner_block") is not None:
+        cmds.checkBox(F_CORNER, edit=True, value=bool(v["corner_block"]))
+    if v.get("closed") is not None:
+        cmds.checkBox(F_CLOSED, edit=True, value=bool(v["closed"]))
+    _on_kind()
+
+
+def _refresh_presets(select=None):
+    """プリセットのメニュー項目を作り直す (select があればそれを選ぶ)。"""
+    for item in cmds.optionMenu(F_PRESET, q=True, itemListLong=True) or []:
+        cmds.deleteUI(item)
+    names = _presets().list_presets()
+    for n in names:
+        cmds.menuItem(label=n, parent=F_PRESET)
+    if select in names:
+        cmds.optionMenu(F_PRESET, edit=True, select=names.index(select) + 1)
+
+
+def _preset_name():
+    return cmds.optionMenu(F_PRESET, q=True, value=True)
+
+
+def _do_preset_load():
+    name = _preset_name()
+    _apply_values(_presets().load_preset(name))
+    _status("プリセットを読み込みました: {}".format(name))
+
+
+def _do_preset_save():
+    res = cmds.promptDialog(title="プリセットを保存", message="プリセット名（同じ名前は上書き）:", button=["保存", "キャンセル"],
+                            defaultButton="保存", cancelButton="キャンセル", dismissString="キャンセル")
+    if res != "保存":
+        return
+    name = cmds.promptDialog(q=True, text=True).strip()
+    saved = _presets().save_preset(name, _collect_values())
+    _refresh_presets(select=saved)
+    _status("プリセットを保存しました: {}".format(saved))
+
+
+def _do_preset_delete():
+    name = _preset_name()
+    if _presets().is_builtin(name):
+        _status("組み込みプリセットは削除できません")
+        return
+    _presets().delete_preset(name)
+    _refresh_presets()
+    _status("プリセットを削除しました: {}".format(name))
 
 
 def _snap():
@@ -152,7 +257,10 @@ def _compute_preview():
               shape=SHAPES[cmds.optionMenu(F_SHAPE, q=True, select=True) - 1],
               plane=PLANES[cmds.optionMenu(F_PLANE, q=True, select=True) - 1],
               member_len=cmds.floatFieldGrp(F_MEMBER, q=True, value1=True),
-              closed=cmds.checkBox(F_CLOSED, q=True, value=True), snap_angle=angle, snap_grid=grid)
+              closed=cmds.checkBox(F_CLOSED, q=True, value=True), snap_angle=angle, snap_grid=grid,
+              radius=cmds.floatFieldGrp(F_RADIUS, q=True, value1=True),
+              angle=cmds.floatFieldGrp(F_ARCANGLE, q=True, value1=True),
+              base_size=cmds.floatFieldGrp(F_WIDTH, q=True, value1=True))
     if kind == K_PATH:
         curve = _selected_curve()
         if curve is None:
@@ -348,7 +456,15 @@ def _create():
         _created(grp, label)
         return
     parent, label = _resolve_parent()
-    if _is_preset():
+    if _kind() == K_ARC:
+        grp = t.build_arc(name, cmds.floatFieldGrp(F_RADIUS, q=True, value1=True),
+                          cmds.floatFieldGrp(F_ARCANGLE, q=True, value1=True),
+                          cmds.floatFieldGrp(F_MEMBER, q=True, value1=True), _params(), parent=parent,
+                          plane=PLANES[cmds.optionMenu(F_PLANE, q=True, select=True) - 1],
+                          snap_angle=0 if angle is None else angle, snap_grid=grid)
+    elif _kind() == K_TOWER:
+        grp = t.build_tower(name, height, _params(), parent=parent, base_size=width)
+    elif _is_preset():
         shape = SHAPES[cmds.optionMenu(F_SHAPE, q=True, select=True) - 1]
         plane = PLANES[cmds.optionMenu(F_PLANE, q=True, select=True) - 1]
         grp = t.build_preset(name, shape, width, height, _params(), parent=parent, plane=plane,
@@ -390,6 +506,8 @@ def _do_rebuild():
             kw.update(closed=True)  # 未チェックは保存済みの closed を保つ
     elif info["kind"] == "gate":
         kw.update(width=cmds.floatFieldGrp(F_WIDTH, q=True, value1=True), height=cmds.floatFieldGrp(F_HEIGHT, q=True, value1=True))
+    elif info["kind"] == "tower":
+        kw.update(height=cmds.floatFieldGrp(F_HEIGHT, q=True, value1=True), base_size=cmds.floatFieldGrp(F_WIDTH, q=True, value1=True))
     else:
         kw.update(length=cmds.floatFieldGrp(F_LEN, q=True, value1=True))
     _state["busy"] = True
@@ -527,6 +645,13 @@ def show_window():
                     "③ 形を変えるなら『編集用の点を表示』で出る黄色い十字を W キーで動かし、『再生成』\n"
                     "    （動かすと黄色の線が追従。再生成でスナップが効く）\n"
                     "部材 1 本 = SC_ 1 つ = Box コライダー 1 つ。SM_Bg_ 配下に作ると Export Block の対象。単位 cm", align="left")
+    cmds.rowLayout(numberOfColumns=5, adjustableColumn=2, columnAttach=[(1, "right", 4)])
+    cmds.text(label="プリセット:")
+    cmds.optionMenu(F_PRESET)
+    cmds.button(label="読み込み", command=_guard(_do_preset_load))
+    cmds.button(label="保存...", command=_guard(_do_preset_save))
+    cmds.button(label="削除", command=_guard(_do_preset_delete))
+    cmds.setParent("..")
     cmds.checkBox(F_PREVIEW, label="プレビュー表示（黄色の線 = 部材の中心線、正方形 = 断面）",
                   value=bool(cmds.optionVar(q=OPT_PREVIEW)) if cmds.optionVar(exists=OPT_PREVIEW) else True,
                   changeCommand=_on_preview_toggle)
@@ -537,6 +662,8 @@ def show_window():
     cmds.menuItem(label="パス（カーブから）")
     cmds.menuItem(label="形プリセット")
     cmds.menuItem(label="選択した点から")
+    cmds.menuItem(label="円弧 / 円")
+    cmds.menuItem(label="塔（グランドサポート）")
     cmds.optionMenu(F_SHAPE, label="形（プリセット）", changeCommand=_update_preview)
     for lbl in ("直線", "L 字", "コの字", "ロの字"):
         cmds.menuItem(label=lbl)
@@ -544,9 +671,11 @@ def show_window():
     cmds.menuItem(label="立面 XY")
     cmds.menuItem(label="床面 XZ")
     cmds.floatFieldGrp(F_LEN, changeCommand=_update_preview, label="長さ（直線）", value1=500.0, columnWidth2=(130, 80))
-    cmds.floatFieldGrp(F_WIDTH, changeCommand=_update_preview, label="幅（門型・プリセット）", value1=600.0, columnWidth2=(130, 80))
-    cmds.floatFieldGrp(F_HEIGHT, changeCommand=_update_preview, label="高さ（門型・プリセット）", value1=400.0, columnWidth2=(130, 80))
-    cmds.floatFieldGrp(F_MEMBER, changeCommand=_update_preview, label="部材長（パス）", value1=t.DEFAULT_MEMBER_LEN, columnWidth2=(130, 80))
+    cmds.floatFieldGrp(F_WIDTH, changeCommand=_update_preview, label="幅（門型・プリセット・塔のベース）", value1=600.0, columnWidth2=(130, 80))
+    cmds.floatFieldGrp(F_HEIGHT, changeCommand=_update_preview, label="高さ（門型・プリセット・塔）", value1=400.0, columnWidth2=(130, 80))
+    cmds.floatFieldGrp(F_RADIUS, changeCommand=_update_preview, label="半径（円弧）", value1=300.0, columnWidth2=(130, 80))
+    cmds.floatFieldGrp(F_ARCANGLE, changeCommand=_update_preview, label="角度（円弧。360 = 円）", value1=360.0, columnWidth2=(130, 80))
+    cmds.floatFieldGrp(F_MEMBER, changeCommand=_update_preview, label="部材長（パス・円弧）", value1=t.DEFAULT_MEMBER_LEN, columnWidth2=(130, 80))
     cmds.checkBox(F_CLOSED, label="閉じる（パス・点から）", value=False, changeCommand=_update_preview)
     cmds.optionMenu(F_ANGLE, label="スナップ角度（パス系）", changeCommand=_update_preview)
     for lbl in ("自動（ポリライン 90°・曲線はなし）", "なし", "45°", "90°"):
@@ -556,6 +685,17 @@ def show_window():
     cmds.floatFieldGrp(F_SECTION, changeCommand=_update_preview, label="断面サイズ", value1=d["section"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_CHORD, label="弦径", value1=d["chord_dia"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_SEG, label="セグメント長", value1=d["seg_len"], columnWidth2=(130, 80))
+    cmds.frameLayout(collapsable=True, collapse=True, label="詳細", marginWidth=4)
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
+    cmds.floatFieldGrp(F_DIA, changeCommand=_update_preview, label="横桟・斜材径", value1=d["brace_dia"], columnWidth2=(130, 80))
+    cmds.intFieldGrp(F_CHORDDIV, label="弦の円周分割（4〜16）", value1=d["chord_div"], columnWidth2=(130, 80))
+    cmds.intFieldGrp(F_BRACEDIV, label="斜材の円周分割（3〜12）", value1=d["brace_div"], columnWidth2=(130, 80))
+    cmds.optionMenu(F_PATTERN, label="斜材パターン")
+    cmds.menuItem(label="ジグザグ")
+    cmds.menuItem(label="ラダー")
+    cmds.checkBox(F_CORNER, label="角にブロックを置く（門型・パス・円弧）", value=d["corner_block"])
+    cmds.setParent("..")
+    cmds.setParent("..")
     cmds.button(label="生成", command=_guard(_do_create))
     cmds.button(label="編集用の点を表示", command=_guard(_do_show_points))
     cmds.button(label="選択した点の後ろに点を追加", command=_guard(_do_add_point))
@@ -574,4 +714,5 @@ def show_window():
     _state["edit_group"] = None
     _state["jobs"] = []
     _state["busy"] = False
+    _refresh_presets()
     _on_kind()  # ヒント表示とプレビュー更新

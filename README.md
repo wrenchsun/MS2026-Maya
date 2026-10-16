@@ -115,6 +115,11 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 2. **生成**。生成先は `SM_Bg_<区画>`（またはその子孫）を選んでいればその区画の下（`Export Block` のコライダーになる）、他の transform を選んでいればその下、未選択なら最上位（`SM_Truss_` を選んだ場合はそのトラスの親）。ステータス行に「生成先」が出る。後から `SM_Bg_` に入れてもそのまま書き出せる
 3. **形を変えたいとき**: トラスを選んで **編集用の点を表示** → 出てきた黄色い十字を W キーで動かし、**選択したトラスを再生成**（直線・門型は自動でパスに変換される）
 
+### 詳細とプリセット
+
+- **詳細**（折りたたみ枠。初期は閉じている）: 横桟・斜材径（既定 3）、弦の円周分割（既定 8、4〜16 の整数）、斜材の円周分割（既定 6、3〜12）、**斜材パターン**（ジグザグ = 横桟 + 斜材 / ラダー = 横桟だけ。横桟の間隔はセグメント長）、角にブロックを置く。生成・プレビュー・再生成のすべてに反映される（`params.brace_pattern` / `chord_div` / `brace_div` / `brace_dia`）
+- **プリセット**（ウィンドウ上部。`ms2026_maya_truss_presets.py`）: メニューで選んで **読み込み** で全入力欄に値が入る。**保存...** は名前を聞いて今の全入力（種類・寸法・断面・スナップ・詳細ほか）を保存（同名は上書き）。**削除** は自分で保存したものだけ。組み込みの「標準 30cm 門型」「大型 50cm 門型（幅 1000 高さ 600）」「円形リング R300」「塔 400」は削除できない。保存先は Maya の optionVar `ms2026_truss_presets`（JSON、このマシンの Maya 設定）。`save_preset` / `load_preset` / `delete_preset` / `list_presets`
+
 ### 種類の説明
 
 - **直線**: 長さ。原点は部材の中心
@@ -122,6 +127,10 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 - **パス（カーブから）**: カーブ（nurbsCurve を持つ transform）を 1 本選ぶ。degree 1 のカーブは CV をそのまま点列にしてスパンごとに 1 部材。滑らかなカーブは弧長を **部材長**（既定 200）で等分（分割数 = max(1, round(弧長 / 部材長))）。閉カーブは自動で閉じる。ポリラインを閉じたいときは **閉じる**
 - **形プリセット**: 直線 / L 字 / コの字 / ロの字、平面（立面 XY / 床面 XZ）、幅・高さ。点は部材の中心線で、原点は床面の中央（左右対称）。立面 XY では直線 / ロの字を断面の半分持ち上げて床に乗せ、L 字 / コの字は柱の下端が y=0。持ち上げがグリッドの倍数でないとき、グリッドは生成時の形にだけ掛け、保存する `snap_grid` は 0。床面 XZ は y=0 で奥行き（高さ）が原点中心
 - **選択した点から**: ロケータ等を作りたい順に選ぶ（2 個以上）。ロケータは区画の外にあってよく、生成後は不要
+- **円弧 / 円**: 半径・角度（360 = 円）・部材長・平面（床面 XZ = 円形トラスのリング / 立面 XY = アーチ）。分割数 = max(2, round(弧長 / 部材長))。360° は閉じたパスで始点を重複させない（半径 300・部材長 200 なら 9 点 9 部材）。立面 XY で 180° 以下は頂点が真上に来て両端が床（y=0）に乗る。実体はパス（`kind: "path"`）なので編集用の点もそのまま使える。JSON に `arc: {radius, angle, member_len, plane}` を情報として残す（形は `points` が正）。`arc_points` / `build_arc`
+- **塔（グランドサポート）**: 高さ・ベース幅（`base_size`、既定 100）。原点は床面の中央。`SM_Truss_<名前>` の下に `SC_Truss_<名前>_Post`（垂直トラス + 上端に被せるスリーブ = 断面 + 10 の角柱、高さ `sleeve_height` 60 をトラス上端中心に結合、Box 1 つ）と `SC_Truss_<名前>_Base`（床のベースプレート `base_size` × 厚さ 5 × `base_size`、y=0 から上、Box 1 つ）。トラスは y=5（ベースの上）から `height`。`kind: "tower"`、再生成できるが、パスには変換できない。`build_tower`
+- **コーナーブロック**（`params.corner_block`、既定 ON）: 門型とパスの角に、断面サイズの立方体ブロックを置く。パスは隣り合う 2 部材が交わる頂点（閉パスは全頂点、開パスは両端を除く内部頂点）で、番号の若い方の部材メッシュに結合する（部材数・Box 数は増えない。Box は AABB なのでブロックぶん終点側に断面の半分 = 15 cm 伸びる）。門型は柱の上端の内側（柱の寸法は変わらない）。OFF で従来どおり
+- 寸法が正確: 部材端からはみ出していた斜材・横桟の端面は頂点をクランプして切り揃え、部材の Box は 長さ × 断面 × 断面（±1 cm 以内。例: 柱 400 -> 400 × 30 × 30）
 - 共通: 断面サイズ（既定 30）、弦径（5）、セグメント長（100）。横桟・斜材径は 3、円周分割は弦 8 / 斜材 6（コードの `DEFAULT_PARAMS`）
 - パス系の部材は `SC_Truss_<名前>_01, _02, ...`、グループは `SM_Truss_<名前>`。断面の向きは部材ローカル Y を world Y に寄せる（垂直に近いスパンは world Z 基準）。コーナーでは部材どうしが重なる（コライダーは Box のまま）。部材が断面以下の短いスパンはスキップし、本数を print する
 - スナップ（パス / プリセット / 点）: **角度**（自動 / なし / 45° / 90°）と **グリッド** cm（既定 10、0 でなし）。先頭点を固定し、各スパンを最も近い許可方向（90° は ±X/±Y/±Z、45° は座標平面内の 45° 対角も追加）に置き換え、方向への長さ（グリッドに丸める）で次の点を決める。自動 = ポリライン / プリセット / 点は 90°、滑らかなカーブは角度なし（グリッドだけ）。`ms2026_truss` JSON の `snap_angle` / `snap_grid` に保存され、再生成でも適用される。閉じるとき最後 -> 最初のスパンは先頭点が固定なので許可方向からずれうる（print で知らせる）
@@ -157,7 +166,7 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 
 構成: `SM_Bg_<区画>/SM_Truss_<名前>/SC_Truss_<名前>`（直線）、`SC_Truss_<名前>_PostL / _PostR / _Beam`（門型）。グループが `SM_Truss_` なのは `Check` が全 transform に `SM_`/`SC_`/`UCX_` を要求するため。
 
-コードから: `build_straight` / `build_gate` / `build_path` / `build_from_curve` / `build_preset` / `build_from_points` / `rebuild` / `make_edit_points` / `clear_edit_points` / `insert_edit_point` / `delete_edit_point` / `edit_locators` / `resolve_truss` / `make_edit_curve` / `detach_curve` / `convert_to_path` / `snap_points` / `preset_points` / `points_from_selection` / `sample_curve` / `preview_points_for` / `show_preview` / `clear_preview`。検証は `tests/verify_truss.py`（mayapy）。
+コードから: `build_straight` / `build_gate` / `build_tower` / `arc_points` / `build_arc` / `build_path` / `build_from_curve` / `build_preset` / `build_from_points` / `rebuild` / `make_edit_points` / `clear_edit_points` / `insert_edit_point` / `delete_edit_point` / `edit_locators` / `resolve_truss` / `make_edit_curve` / `detach_curve` / `convert_to_path` / `snap_points` / `preset_points` / `points_from_selection` / `sample_curve` / `preview_points_for` / `show_preview` / `clear_preview`。検証は `tests/verify_truss.py`（mayapy）。
 
 ## リロード
 
