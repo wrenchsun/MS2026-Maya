@@ -25,6 +25,15 @@ def near(a, b, tol=5.0):  # 斜材の端面が部材端から数 cm はみ出す
 
 
 def main():
+    # ツール全体のリロード (standalone。ウィンドウなし) を 1 回通してから検証を続ける
+    import ms2026_maya_reload
+    global settings, tools, truss
+    names = ms2026_maya_reload.reload_all(reopen=False)
+    assert len(names) >= 1, names
+    print("reload_all:", len(names), "modules")
+    import ms2026_maya_settings as settings
+    import ms2026_maya_tools as tools
+    import ms2026_maya_truss as truss
     cmds.file(new=True, force=True)
     cmds.currentUnit(linear="cm")
     top = cmds.group(empty=True, name="SM_Bg_TrussTest", world=True)

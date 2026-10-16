@@ -8,6 +8,14 @@ F_NAME, F_KIND, F_LEN, F_WIDTH, F_HEIGHT = ("MS2026TrussName", "MS2026TrussKind"
 F_SECTION, F_CHORD, F_SEG, STATUS = "MS2026TrussSection", "MS2026TrussChord", "MS2026TrussSeg", "MS2026TrussStatus"
 
 
+RELOAD_ALL = "import importlib, ms2026_maya_reload as r; importlib.reload(r); r.reload_all()"
+
+
+def _reload_deferred():
+    """リロードで自分のウィンドウが消えるので、コールバックを抜けてから実行する。"""
+    cmds.evalDeferred(RELOAD_ALL)
+
+
 def _truss():
     import ms2026_maya_truss as t
     return t
@@ -127,6 +135,7 @@ def show_window():
     cmds.floatFieldGrp(F_SEG, label="セグメント長", value1=d["seg_len"], columnWidth2=(130, 80))
     cmds.button(label="生成（選択中の SM_Bg_ グループ配下）", command=_guard(_do_create))
     cmds.button(label="選択したトラスを再生成", command=_guard(_do_rebuild))
+    cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")
     cmds.showWindow(WINDOW)
     _on_kind()

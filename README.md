@@ -118,6 +118,15 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 
 構成: `SM_Bg_<区画>/SM_Truss_<名前>/SC_Truss_<名前>`（直線）、`SC_Truss_<名前>_PostL / _PostR / _Beam`（門型）。グループが `SM_Truss_` なのは `Check` が全 transform に `SM_`/`SC_`/`UCX_` を要求するため。コードからは `ms2026_maya_truss.build_gate(name, width, height, params, parent)` / `build_straight(name, length, params, parent)` / `rebuild(group)`。検証は `tests/verify_truss.py`（mayapy）。
 
+## リロード
+
+コードを更新したあと Maya を再起動せずに反映する。`ms2026_maya_*` を全部読み直し、メニューを作り直し、開いていたウィンドウ（グレーボックス / トラス生成）も開き直す。
+
+- メニュー `Tools > MS2026 > ツールをリロード`
+- グレーボックス / トラス生成の各ウィンドウの **リロード** ボタン
+- T-Drive の「ツールをリロード」でも同じ処理（`GreyboxTool.refresh()` から呼ぶ）
+- スクリプトエディタ（Python）用の一行: `import importlib, ms2026_maya_reload as r; importlib.reload(r); r.reload_all()`
+
 ## 関数
 
 | 関数 | 内容 |

@@ -53,8 +53,9 @@ class GreyboxTool(object):
         return False
 
     def refresh(self):
-        import ms2026_maya_tools as t
-        importlib.reload(t)  # 「ツールをリロード」で本体も読み直す
+        import ms2026_maya_reload as r
+        importlib.reload(r)
+        r.reload_all()  # 「ツールをリロード」: ms2026_maya_* を全部読み直し、メニュー/ウィンドウも作り直す
 
 
 def create_tool():

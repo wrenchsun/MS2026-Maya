@@ -20,6 +20,14 @@ PROP_LABEL = "MS2026PropDirLabel"
 RELOAD = "import importlib, ms2026_maya_tools as t; importlib.reload(t); "
 
 
+RELOAD_ALL = "import importlib, ms2026_maya_reload as r; importlib.reload(r); r.reload_all()"
+
+
+def _reload_deferred():
+    """リロードで自分のウィンドウが消えるので、コールバックを抜けてから実行する。"""
+    cmds.evalDeferred(RELOAD_ALL)
+
+
 def _t():
     import ms2026_maya_tools as t
     return t
@@ -58,6 +66,8 @@ def install_menu():
                                    "importlib.reload(ms2026_maya_truss); importlib.reload(u); u.show_window()")
     cmds.menuItem(divider=True)
     cmds.menuItem(label="シェルフを作成", command=RELOAD + "t.install_shelf()")
+    cmds.menuItem(divider=True)
+    cmds.menuItem(label="ツールをリロード", command=RELOAD_ALL)
     cmds.setParent("..", menu=True)
 
 
@@ -281,6 +291,7 @@ def show_window():
     cmds.text(PROP_LABEL, label="保存先: " + _pdir(), align="left")
     cmds.setParent("..")
     cmds.setParent("..")
+    cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")
     cmds.showWindow(WINDOW)
     _refresh()
