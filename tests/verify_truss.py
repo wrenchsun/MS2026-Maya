@@ -75,6 +75,18 @@ def main():
     info = truss.read_info(gate)
     assert info["width"] == 800 and info["height"] == 500, info
     print("rebuild OK:", info["kind"], info["width"], info["height"])
+
+    # 親なし (world): SM_Bg_ の外でも最上位に SM_Truss_ グループができる
+    g2 = truss.build_gate("Free", 600, 400)
+    l2 = truss.build_straight("FreeLine", 300)
+    for g in (g2, l2):
+        assert cmds.listRelatives(g, parent=True) is None, g
+        assert truss.is_truss_group(g) and g.startswith("|SM_Truss_"), g
+    assert sorted(c.split("|")[-1] for c in cmds.listRelatives(g2, children=True, fullPath=True)) == [
+        "SC_Truss_Free_Beam", "SC_Truss_Free_PostL", "SC_Truss_Free_PostR"]
+    g2 = truss.rebuild(g2, width=700)
+    assert cmds.listRelatives(g2, parent=True) is None and truss.read_info(g2)["width"] == 700
+    print("world parent OK:", g2, l2)
     print("VERIFY OK: boxes={} (gate 3 + straight 1) out={}".format(len(cols), out))
 
 

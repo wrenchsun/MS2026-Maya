@@ -65,12 +65,29 @@ def _block_group():
     return None
 
 
+def _resolve_parent():
+    """生成先を決める。戻り値: (親の long 名 or None=最上位, ステータス用ラベル)。
+    1) 選択の祖先に SM_Bg_ があればその最上位区画  2) 選択された最初の transform
+    (SM_Truss_ を選んでいたらそのトラスの親。入れ子にしない)  3) 未選択なら最上位。"""
+    t = _truss()
+    block = _block_group()
+    if block:
+        return block, block.lstrip("|")
+    for s in cmds.ls(selection=True, long=True, type="transform") or []:
+        parts = s.strip("|").split("|")
+        for i in range(len(parts)):
+            path = "|" + "|".join(parts[:i + 1])
+            if t.is_truss_group(path):
+                if i == 0:
+                    return None, "最上位"
+                parent = "|" + "|".join(parts[:i])
+                return parent, parts[i - 1]
+        return s, parts[-1]
+    return None, "最上位"
+
+
 def _do_create():
-    parent = _block_group()
-    if parent is None:
-        _status("エラー: 先に SM_Bg_<区画> グループを選択してください")
-        cmds.warning("[MS2026] 先に SM_Bg_<区画> グループを選択してください。")
-        return
+    parent, label = _resolve_parent()
     t = _truss()
     name = cmds.textField(F_NAME, q=True, text=True).strip() or "Truss"
     if _is_gate():
@@ -79,7 +96,7 @@ def _do_create():
     else:
         grp = t.build_straight(name, cmds.floatFieldGrp(F_LEN, q=True, value1=True), _params(), parent=parent)
     cmds.select(grp, replace=True)
-    _status("生成: {}".format(grp))
+    _status("生成: {}（生成先: {}）".format(grp, label))
 
 
 def _selected_truss():
@@ -122,7 +139,7 @@ def show_window():
     cmds.window(WINDOW, title="MS2026 トラス生成", widthHeight=(340, 380), sizeable=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4, columnOffset=("both", 6))
     cmds.text(label="部材 1 本（柱 1 本・梁 1 本）= SC_ 1 つ = Box コライダー 1 つ\n"
-                    "SM_Bg_<区画> を選んで「生成」。単位 cm", align="left")
+                    "SM_Bg_ グループ配下に作ると Export Block のコライダーになる。未選択なら最上位に作る。単位 cm", align="left")
     cmds.textFieldGrp(F_NAME, label="名前", text="Truss", columnWidth2=(110, 200))
     cmds.optionMenu(F_KIND, label="種類", changeCommand=_on_kind)
     cmds.menuItem(label="直線")
@@ -133,7 +150,7 @@ def show_window():
     cmds.floatFieldGrp(F_SECTION, label="断面サイズ", value1=d["section"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_CHORD, label="弦径", value1=d["chord_dia"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_SEG, label="セグメント長", value1=d["seg_len"], columnWidth2=(130, 80))
-    cmds.button(label="生成（選択中の SM_Bg_ グループ配下）", command=_guard(_do_create))
+    cmds.button(label="生成", command=_guard(_do_create))
     cmds.button(label="選択したトラスを再生成", command=_guard(_do_rebuild))
     cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")

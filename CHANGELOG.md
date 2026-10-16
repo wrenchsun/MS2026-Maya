@@ -7,12 +7,14 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 ## [Unreleased]
 
 ### 追加
+- トラス生成が `SM_Bg_` 未選択でも使える: 生成先は `SM_Bg_` 区画 → 選択した transform（`SM_Truss_` ならその親）→ 最上位の順。ボタン名は `生成`。生成物の名前・属性は不変。`tests/verify_truss.py` に親なし（world）のケースを追加
 - ツール全体のリロード `ms2026_maya_reload.reload_all(reopen=True)`: `ms2026_maya_*` を `sys.modules` から捨てて読み直し、メニューと開いていたウィンドウを作り直す。メニュー `ツールをリロード`、両ウィンドウの `リロード` ボタン、T-Drive の「ツールをリロード」（`GreyboxTool.refresh()`）から呼ぶ。従来は `refresh()` が `ms2026_maya_tools` だけ読み直しており、新しいメニュー項目が出なかった
 - ライブ会場用トラスのプロシージャル生成 `ms2026_maya_truss.py`（直線 / 門型）と、ウィンドウ `ms2026_maya_ui_truss.py`（`Tools > MS2026 > トラス生成...`）。部材 1 本 = `SC_` 1 つ = Box 1 つ
 - `ms2026_maya_collision.py`: ノードの文字列属性 `ms2026_collider_shape`（box/sphere/capsule）があれば自動判定より優先。属性が無いノードの挙動は不変
 - `tests/verify_truss.py`（mayapy 検証。配布対象の外）
 
 ### 検証
+- 2026-10-16 mayapy（Maya 2026）で `tests/verify_truss.py`: 親なし（world）で `build_gate` / `build_straight` が最上位に `SM_Truss_` を作り、`rebuild` も最上位のまま。既存の検証も全部通過。生成先の決定（`_resolve_parent`）と GUI は未確認
 - 2026-10-16 mayapy（Maya 2026）で `tests/verify_truss.py` の先頭に `ms2026_maya_reload.reload_all(reopen=False)`（standalone）を 1 回通してから既存の検証が全部通ることを確認。GUI のメニュー / ボタン / ウィンドウ再オープンは未確認
 - 2026-10-16 mayapy（Maya 2026）で `tests/verify_truss.py`: 門型（幅 600 × 高さ 400）+ 直線（長さ 500）を `SM_Bg_TrussTest` 配下に生成 → `check_selection` 問題 0 件 → `export_block` → `.colliders.json` は Box 4 件（門 3 + 直線 1）。size は PostL/PostR = 403×30×30、Beam = 543×30×30（幅 600 − 柱 2 本分 60 = 540）、Line = 503×30×30。+3 cm は斜材の端面が部材端からはみ出す分。`rebuild`（800×500）も確認
 
