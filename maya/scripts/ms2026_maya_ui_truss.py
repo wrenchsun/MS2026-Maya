@@ -89,7 +89,7 @@ def _resolve_parent():
 def _do_create():
     parent, label = _resolve_parent()
     t = _truss()
-    name = cmds.textField(F_NAME, q=True, text=True).strip() or "Truss"
+    name = cmds.textFieldGrp(F_NAME, q=True, text=True).strip() or "Truss"
     if _is_gate():
         grp = t.build_gate(name, cmds.floatFieldGrp(F_WIDTH, q=True, value1=True),
                            cmds.floatFieldGrp(F_HEIGHT, q=True, value1=True), _params(), parent=parent)
