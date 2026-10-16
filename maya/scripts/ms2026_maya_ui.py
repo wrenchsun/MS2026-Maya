@@ -67,6 +67,7 @@ def install_menu():
     cmds.menuItem(divider=True)
     cmds.menuItem(label="シェルフを作成", command=RELOAD + "t.install_shelf()")
     cmds.menuItem(divider=True)
+    cmds.menuItem(label="マニュアル", command=RELOAD + "t.open_manual()")
     cmds.menuItem(label="ツールをリロード", command=RELOAD_ALL)
     cmds.setParent("..", menu=True)
 
@@ -291,6 +292,7 @@ def show_window():
     cmds.text(PROP_LABEL, label="保存先: " + _pdir(), align="left")
     cmds.setParent("..")
     cmds.setParent("..")
+    cmds.button(label="マニュアル", command=_guard(lambda: _t().open_manual()))
     cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")
     cmds.showWindow(WINDOW)

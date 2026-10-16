@@ -308,6 +308,25 @@ def install_shelf():
     cmds.tabLayout(top, edit=True, selectTab=name)
 
 
+def manual_path():
+    """HTML マニュアル (docs/manual.html) の絶対パス。"""
+    return os.path.join(REPO_ROOT, "docs", "manual.html")
+
+
+def open_manual():
+    """HTML マニュアルを既定のブラウザで開く。無ければ RuntimeError。"""
+    path = manual_path()
+    if not os.path.isfile(path):
+        raise RuntimeError("マニュアルが見つかりません: " + path)
+    url = "file:///" + path.replace("\\", "/")
+    try:
+        cmds.launch(webPage=url)
+    except Exception:  # noqa: BLE001  standalone など launch が使えない環境
+        import webbrowser
+        webbrowser.open(url)
+    return path
+
+
 def install_menu():
     """トップメニュー MS2026 を作成する (実装は ms2026_maya_ui)。GUI 専用。"""
     import importlib

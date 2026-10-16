@@ -35,6 +35,7 @@ def main():
     import ms2026_maya_settings as settings
     import ms2026_maya_tools as tools
     import ms2026_maya_truss as truss
+    assert os.path.isfile(tools.manual_path()), tools.manual_path()
     cmds.file(new=True, force=True)
     cmds.currentUnit(linear="cm")
     top = cmds.group(empty=True, name="SM_Bg_TrussTest", world=True)
@@ -387,6 +388,110 @@ def verify_snap(settings, tools):
     cmds.undo()
     assert not cmds.objExists(ug), "チャンクが 1 回の Undo で戻らない"
     print("preview undo OK")
+
+    # --- コンポーネント編集 (CV モード) 中でもカーブの hilite / モードを壊さない
+    cv = cmds.curve(d=1, p=[(0, 0, 0), (100, 0, 0), (100, 0, 100)], name="HlCurve")
+    cv = cmds.ls(cv, long=True)[0]
+    cmds.select(cv)
+    cmds.selectMode(component=True)
+    cmds.hilite(cv)
+    cmds.select(clear=True)
+    assert cv in (cmds.ls(hilite=True, long=True) or [])
+    mode_before = cmds.selectMode(q=True, component=True)  # standalone では False のまま (GUI でのみ True)
+    truss.show_preview(pg, None, 30)
+    truss.clear_preview()
+    truss.show_preview(pg, None, 30)
+    assert cv in (cmds.ls(hilite=True, long=True) or []), cmds.ls(hilite=True, long=True)
+    assert cmds.selectMode(q=True, component=True) == mode_before
+    assert not cmds.ls(selection=True), cmds.ls(selection=True)
+    truss.clear_preview()
+    assert cv in (cmds.ls(hilite=True, long=True) or [])
+    assert cmds.selectMode(q=True, component=True) == mode_before
+    assert truss.is_component_editing()  # hilite だけ (selectMode は object のまま) でも True
+    cmds.hilite(cv, unHilite=True)
+    cmds.selectMode(object=True)
+    assert not truss.is_component_editing()
+    cmds.select(cv + ".cv[0]")
+    assert truss.is_component_editing()  # コンポーネント選択
+    cmds.select(clear=True)
+    assert not truss.is_component_editing()
+    marker2 = cmds.group(empty=True, name="ObjSelMarker")
+    cmds.select(marker2)
+    sel_o = cmds.ls(selection=True, long=True)
+    truss.show_preview(pg, None, 30)
+    assert cmds.ls(selection=True, long=True) == sel_o
+    truss.clear_preview()
+    assert cmds.ls(selection=True, long=True) == sel_o
+    print("preview component mode OK")
+    # --- 編集用の点 (ロケータ方式)
+    cmds.select(clear=True)
+    eg = truss.build_preset("EditU", "U", 600, 400)
+    ei = truss.read_info(eg)
+    locs = truss.make_edit_points(eg)
+    assert len(locs) == 4, locs
+    egrp = truss.read_info(eg)["edit_points"]
+    assert egrp.count("|") == 1 and egrp.endswith("Truss_EditU_Edit"), egrp
+    assert [l.split("|")[-1] for l in locs] == ["Truss_EditU_P0{}".format(i) for i in (1, 2, 3, 4)], locs
+    assert all(l.startswith(egrp + "|") for l in locs)
+    world = truss._local_to_world(ei["points"], eg)
+    for l, w in zip(locs, world):
+        assert max(abs(a - b) for a, b in zip(cmds.xform(l, q=True, ws=True, t=True), w)) < 0.01, (l, w)
+    assert truss.make_edit_points(eg) == locs  # 作り直さない
+    assert truss.resolve_truss(locs[1]) == eg and truss.resolve_truss(egrp) == eg
+    def _ymax(g):
+        return max(cmds.exactWorldBoundingBox(m)[4] for m in cmds.listRelatives(g, children=True, fullPath=True, type="transform"))
+    y0 = _ymax(eg)
+    for l in locs[1:3]:  # 上の 2 点
+        cmds.xform(l, ws=True, r=True, t=(0, 100, 0))
+    truss.rebuild(eg)
+    y1 = _ymax(eg)
+    assert abs((y1 - y0) - 100) < 1.0, (y0, y1)
+    sp = truss.read_info(eg)["points"]
+    assert abs(sp[1][1] - (ei["points"][1][1] + 100)) < 0.01, sp
+    for l, w in zip(truss.edit_locators(eg), truss._local_to_world(sp, eg)):
+        assert max(abs(a - b) for a, b in zip(cmds.xform(l, q=True, ws=True, t=True), w)) < 0.01
+    # スナップ後に揃う: 少しずらして rebuild すると 10 cm グリッドに戻る
+    cmds.xform(locs[0], ws=True, r=True, t=(3, 0, 0))
+    truss.rebuild(eg, snap_grid=10.0)
+    wx = cmds.xform(locs[0], q=True, ws=True, t=True)[0]
+    assert abs(wx / 10.0 - round(wx / 10.0)) < 1e-6, wx
+    print("edit points move / rebuild OK")
+    nl = truss.insert_edit_point(eg, truss.edit_locators(eg)[0])
+    assert len(truss.edit_locators(eg)) == 5 and nl.split("|")[-1] == "Truss_EditU_P02", nl
+    assert len(truss.read_info(eg)["points"]) == 5
+    truss.rebuild(eg)
+    assert len([m for m in cmds.listRelatives(eg, children=True, type="transform")]) == 4
+    rest = truss.delete_edit_point(eg, truss.edit_locators(eg)[1])
+    assert len(rest) == 4 and len(truss.read_info(eg)["points"]) == 4
+    print("edit points insert / delete OK")
+    eg2 = truss.build_preset("EditRing", "rect", 600, 400)
+    assert len(truss.make_edit_points(eg2)) == 4  # 閉パスでも点は重複しない
+    l4 = truss.edit_locators(eg2)
+    n2 = truss.insert_edit_point(eg2, l4[-1])  # 閉パスの最後 -> 最初との中点
+    assert len(truss.edit_locators(eg2)) == 5
+    truss.clear_edit_points(eg2)
+    assert not cmds.objExists(truss.read_info(eg2).get("edit_points") or "|none") and truss.read_info(eg2)["edit_points"] is None
+    truss.rebuild(eg2)
+    truss.clear_edit_points(eg2)  # 無くても安全
+    pts_before = truss.read_info(eg)["points"]
+    truss.clear_edit_points(eg)
+    assert not cmds.objExists(egrp) and truss.read_info(eg)["edit_points"] is None
+    truss.rebuild(eg)
+    assert truss.read_info(eg)["points"] == pts_before or all(
+        max(abs(a - b) for a, b in zip(p, q)) < 0.01 for p, q in zip(truss.read_info(eg)["points"], pts_before))
+    assert abs(_ymax(eg) - y1) < 1.0  # ロケータを消しても形が残る
+    print("edit points clear OK")
+    sg = truss.build_straight("EditLine", 500)
+    sl = truss.make_edit_points(sg)
+    assert truss.read_info(sg)["kind"] == "path" and len(sl) == 2, truss.read_info(sg)["kind"]
+    try:
+        truss.delete_edit_point(sg, sl[0])
+        raise AssertionError("2 点未満になる削除が通った")
+    except ValueError:
+        pass
+    gg = truss.build_gate("EditGate", 600, 400)
+    assert len(truss.make_edit_points(gg)) == 4 and truss.read_info(gg)["kind"] == "path"
+    print("edit points straight / gate OK")
     print("preview / convert_to_path OK")
 
 

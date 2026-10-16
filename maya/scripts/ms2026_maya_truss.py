@@ -4,6 +4,7 @@
 部材内の弦・横桟・斜材は 1 メッシュに結合する。単位 cm / Y 上。長さ方向はローカル +X、断面は YZ。"""
 import json
 import math
+import re
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
@@ -466,11 +467,208 @@ def detach_curve(group):
     return group
 
 
+# ---------------------------------------------------------------- 編集用の点 (ロケータ)
+
+EDIT_LOC_SCALE = 30.0  # ロケータの localScale の既定 (cm 相当。断面サイズに合わせる)
+EDIT_COLOR = 17        # 黄
+_LOC_RE = re.compile(r"_P(\d+)$")
+
+
+def _edit_group_of(info):
+    """info の edit_points が指す最上位グループの long 名 (存在しなければ None)。"""
+    g = info.get("edit_points")
+    if g and cmds.objExists(g):
+        return cmds.ls(g, long=True)[0]
+    return None
+
+
+def edit_locators(group):
+    """編集用ロケータの long 名リスト (名前の番号順)。無ければ空。"""
+    egrp = _edit_group_of(read_info(group))
+    if not egrp:
+        return []
+    kids = cmds.listRelatives(egrp, children=True, fullPath=True, type="transform") or []
+    numbered = []
+    for k in kids:
+        m = _LOC_RE.search(k.split("|")[-1])
+        if m:
+            numbered.append((int(m.group(1)), k))
+    return [k for _, k in sorted(numbered)]
+
+
+def resolve_truss(node):
+    """node (トラスのグループ / 部材 / 編集用ロケータ・Edit グループ) から親トラスの long 名。見つからなければ None。"""
+    if not node or not cmds.objExists(node):
+        return None
+    node = cmds.ls(node, long=True)[0]
+    chain = []
+    cur = node
+    while cur:
+        chain.append(cur)
+        cur = (cmds.listRelatives(cur, parent=True, fullPath=True) or [None])[0]
+    for n in chain:
+        if is_truss_group(n):
+            return n
+    for n in chain:
+        short = n.split("|")[-1]
+        m = re.match(r"^Truss_(.*)_(?:P\d+|Edit\d*)$", short)
+        if not m:
+            continue
+        if _LOC_RE.search(short):
+            egrp = (cmds.listRelatives(n, parent=True, fullPath=True) or [None])[0]
+        else:
+            egrp = n
+        cands = [g for g in (cmds.ls("SM_Truss_*", long=True, type="transform") or []) if is_truss_group(g)]
+        for g in cands:
+            if _edit_group_of(read_info(g)) == egrp:
+                return g
+        for g in cands:
+            if read_info(g).get("name") == m.group(1):
+                return g
+    return None
+
+
+def _make_locator(name, world_pos, parent, scale):
+    loc = cmds.spaceLocator(name=name)[0]
+    loc = cmds.parent(loc, parent)[0]
+    loc = cmds.ls(cmds.ls(parent, long=True)[0] + "|" + loc.split("|")[-1], long=True)[0]
+    cmds.xform(loc, ws=True, t=[float(v) for v in world_pos])
+    shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+    for ax in "XYZ":
+        cmds.setAttr("{}.localScale{}".format(shape, ax), scale)
+    cmds.setAttr(loc + ".overrideEnabled", 1)
+    cmds.setAttr(loc + ".overrideColor", EDIT_COLOR)
+    return loc
+
+
+def _locator_world(loc):
+    return cmds.xform(loc, q=True, ws=True, t=True)
+
+
+def _renumber(egrp, name, ordered):
+    """ordered (ロケータ long 名) を Truss_<name>_P01.. に振り直す (衝突しないよう 2 段階)。新しい long 名を返す。"""
+    egrp = cmds.ls(egrp, long=True)[0]
+    tmp = []
+    for i, loc in enumerate(ordered):
+        tmp.append(cmds.rename(loc, "MS2026_tmp_{}".format(i)))
+    digits = max(2, len(str(len(tmp))))
+    out = []
+    for i, t in enumerate(tmp):
+        new = cmds.rename(egrp + "|" + t.split("|")[-1], "Truss_{}_P{:0{}d}".format(name, i + 1, digits))
+        out.append(cmds.ls(egrp + "|" + new.split("|")[-1], long=True)[0])
+    return out
+
+
+def _sync_points_from_locators(group, info, locs):
+    info["points"] = _world_to_local([_locator_world(l) for l in locs], group)
+    _write_info(group, info)
+
+
+def make_edit_points(group):
+    """パストラスの角ごとに黄色のロケータ Truss_<名前>_P01.. を最上位の Truss_<名前>_Edit の下に world 位置で作る。
+    直線 / 門型は先に convert_to_path する。すでに編集用の点があれば作り直さず選択だけ。戻り値: ロケータの long 名リスト。"""
+    if not is_truss_group(group):
+        raise ValueError("トラスのグループではありません: {}".format(group))
+    group = cmds.ls(group, long=True)[0]
+    if read_info(group).get("kind") in ("straight", "gate"):
+        convert_to_path(group)
+    group = _path_group(group)
+    info = read_info(group)
+    locs = edit_locators(group)
+    if locs:
+        cmds.select(locs, replace=True)
+        return locs
+    stale = _edit_group_of(info)
+    if stale:
+        cmds.delete(stale)  # 中身が空 / 不正なら作り直す
+    section = make_params(info.get("params"))["section"]
+    egrp = cmds.group(empty=True, name="Truss_{}_Edit".format(info["name"]), world=True)
+    egrp = cmds.ls(egrp, long=True)[0]
+    world = _local_to_world(info["points"], group)
+    digits = max(2, len(str(len(world))))
+    locs = [_make_locator("Truss_{}_P{:0{}d}".format(info["name"], i + 1, digits), p, egrp, section)
+            for i, p in enumerate(world)]
+    info["edit_points"] = egrp
+    _write_info(group, info)
+    cmds.select(locs, replace=True)
+    return locs
+
+
+def clear_edit_points(group):
+    """編集用の点 (Truss_<名前>_Edit) を消し、JSON の edit_points を None に。無くても安全。"""
+    group = _path_group(group)
+    info = read_info(group)
+    egrp = _edit_group_of(info)
+    if egrp:
+        cmds.delete(egrp)
+    if info.get("edit_points") is not None:
+        info["edit_points"] = None
+        _write_info(group, info)
+    return group
+
+
+def insert_edit_point(group, after_locator):
+    """after_locator と次の点の中点に新しい点を挿入して番号を振り直す (閉パスの最後は最初との中点)。戻り値: 新しいロケータの long 名。"""
+    group = _path_group(group)
+    info = read_info(group)
+    locs = edit_locators(group)
+    after = cmds.ls(after_locator, long=True)
+    if not after or after[0] not in locs:
+        raise ValueError("このトラスの編集用の点ではありません: {}".format(after_locator))
+    i = locs.index(after[0])
+    if i + 1 < len(locs):
+        nxt = locs[i + 1]
+    elif info.get("closed") and len(locs) > 2:
+        nxt = locs[0]
+    else:
+        raise ValueError("最後の点の後ろには追加できません (閉じていないパス)。最後の手前の点を選んでください")
+    a, b = _locator_world(locs[i]), _locator_world(nxt)
+    egrp = _edit_group_of(info)
+    section = make_params(info.get("params"))["section"]
+    new = _make_locator("MS2026_tmp_new", [(x + y) * 0.5 for x, y in zip(a, b)], egrp, section)
+    ordered = locs[:i + 1] + [new] + locs[i + 1:]
+    ordered = _renumber(egrp, info["name"], ordered)
+    _sync_points_from_locators(group, info, ordered)
+    return ordered[i + 1]
+
+
+def delete_edit_point(group, locator):
+    """locator を削除して番号を振り直す。点が 2 個未満になる削除は ValueError。戻り値: 残ったロケータの long 名リスト。"""
+    group = _path_group(group)
+    info = read_info(group)
+    locs = edit_locators(group)
+    target = cmds.ls(locator, long=True)
+    if not target or target[0] not in locs:
+        raise ValueError("このトラスの編集用の点ではありません: {}".format(locator))
+    if len(locs) - 1 < 2:
+        raise ValueError("点は 2 個以上必要です (これ以上削除できません)")
+    cmds.delete(target[0])
+    rest = [l for l in locs if l != target[0]]
+    rest = _renumber(_edit_group_of(info), info["name"], rest)
+    _sync_points_from_locators(group, info, rest)
+    return rest
+
+
+def edit_points_preview(group, snap_angle=None, snap_grid=None):
+    """ロケータの現在位置 (スナップ適用後) の [(points, closed)] (group ローカル)。ロケータが無ければ ValueError。
+    snap_angle / snap_grid が None なら JSON の値。"""
+    group = _path_group(group)
+    info = read_info(group)
+    locs = edit_locators(group)
+    if len(locs) < 2:
+        raise ValueError("編集用の点がありません")
+    closed = bool(info.get("closed"))
+    angle = info.get("snap_angle", 0) if snap_angle is None else int(snap_angle)
+    grid = info.get("snap_grid", 0) if snap_grid is None else float(snap_grid)
+    pts = _world_to_local([_locator_world(l) for l in locs], group)
+    return [(snap_points(pts, closed, angle, grid), closed)]
+
+
 def rebuild(group, **overrides):
     """グループの ms2026_truss JSON から子を消して同じ場所に再生成する。グループ自身の位置・回転は保つ。
     overrides: length / width / height / params(dict) で寸法を差し替えられる (JSON も更新)。
     パス種別: member_len / closed / snap_angle / snap_grid も可 (点列にスナップを適用して保存)。source_curve のカーブが残っていれば再サンプルして点列を更新、
-    無ければ保存した points から再生成する。グループ内の手動編集は失われる。戻り値: グループ。"""
+    無ければ保存した points から再生成する (編集用の点 = edit_points のロケータがあれば最優先)。グループ内の手動編集は失われる。戻り値: グループ。"""
     if not is_truss_group(group):
         raise ValueError("トラスのグループではありません: {}".format(group))
     group = cmds.ls(group, long=True)[0]
@@ -489,7 +687,11 @@ def rebuild(group, **overrides):
             info["snap_grid"] = float(overrides["snap_grid"])
         closed = bool(info.get("closed")) if overrides.get("closed") is None else bool(overrides["closed"])
         cur = info.get("source_curve")
-        if cur and is_curve(cur):
+        locs = edit_locators(group) if _edit_group_of(info) else []
+        if len(locs) >= 2:  # 編集用の点 (ロケータ) が最優先。形を保存 points に書き戻す
+            info["points"] = _world_to_local([_locator_world(l) for l in locs], group)
+            info["source_curve"] = None  # 後でロケータを消してもカーブに引き戻されない
+        elif cur and is_curve(cur):
             pts, curve_closed = sample_curve(cur, info.get("member_len") or DEFAULT_MEMBER_LEN, space=group)
             closed = closed or curve_closed
             if closed and len(pts) > 2 and max(abs(a - b) for a, b in zip(pts[0], pts[-1])) < 1e-4:
@@ -511,6 +713,12 @@ def rebuild(group, **overrides):
     else:
         raise ValueError("未知のトラス種別: {}".format(info["kind"]))
     _write_info(group, info)
+    if info["kind"] == "path" and _edit_group_of(info):  # ロケータをスナップ後の位置に揃える
+        locs = edit_locators(group)
+        world = _local_to_world(info["points"], group)
+        if len(locs) == len(world):
+            for l, w in zip(locs, world):
+                cmds.xform(l, ws=True, t=w)
     return group
 
 
@@ -604,20 +812,45 @@ def parent_world_matrix(parent):
     return list(cmds.xform(parent, q=True, ws=True, m=True)) if parent else None
 
 
+def is_component_editing():
+    """CV などコンポーネント編集中か。F8 のコンポーネントモード、右クリックメニューの hilite 方式、
+    コンポーネントの選択 (名前に '.' を含む) のいずれか。"""
+    if cmds.selectMode(q=True, component=True):
+        return True
+    if cmds.ls(hilite=True):
+        return True
+    return any("." in n for n in (cmds.ls(selection=True) or []))
+
+
+def _restore_selection(saved_sel, saved_hl):
+    """選択と hilite (コンポーネント編集中のオブジェクト) を、変わっているときだけ元に戻す。"""
+    saved_sel = [n for n in saved_sel if cmds.objExists(n)]
+    saved_hl = [n for n in saved_hl if cmds.objExists(n)]
+    if (cmds.ls(selection=True, long=True) or []) != saved_sel:
+        if saved_sel:
+            cmds.select(saved_sel, replace=True)
+        else:
+            cmds.select(clear=True)
+    now_hl = cmds.ls(hilite=True, long=True) or []
+    if now_hl != saved_hl:
+        if saved_hl:
+            cmds.hilite(saved_hl, replace=True)
+        elif now_hl:
+            cmds.hilite(now_hl, unHilite=True)
+
+
 def _no_undo(fn):
-    """プレビュー処理を Undo 履歴に乗せず、選択も変えない。"""
+    """プレビュー処理を Undo 履歴に乗せず、選択 / hilite も変えない (CV 編集中のカーブを外さない)。"""
     def wrapped(*args, **kwargs):
         old_state = cmds.undoInfo(q=True, state=True)
-        saved = cmds.ls(selection=True, long=True) or []
+        saved_sel = cmds.ls(selection=True, long=True) or []
+        saved_hl = cmds.ls(hilite=True, long=True) or []
         cmds.undoInfo(stateWithoutFlush=False)
         try:
             return fn(*args, **kwargs)
         finally:
             try:
-                if saved:
-                    cmds.select([n for n in saved if cmds.objExists(n)], replace=True)
-                else:
-                    cmds.select(clear=True)
+                _restore_selection(saved_sel, saved_hl)
             finally:
                 cmds.undoInfo(stateWithoutFlush=bool(old_state))
     wrapped.__name__ = fn.__name__

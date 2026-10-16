@@ -34,6 +34,11 @@ def _reload_deferred():
     cmds.evalDeferred(RELOAD_ALL)
 
 
+def _open_manual():
+    import ms2026_maya_tools as tools
+    tools.open_manual()
+
+
 def _truss():
     import ms2026_maya_truss as t
     return t
@@ -125,7 +130,9 @@ def _clear_preview():
     _truss().clear_preview()
 
 
-_state = {"sel": ()}  # 直前に処理した選択 (生成直後の選択変更でプレビューを復活させない)
+_state = {"sel": (), "edit_group": None, "jobs": [], "busy": False}
+# sel = 直前に処理した選択 (生成直後の選択変更でプレビューを復活させない) / edit_group = 編集用の点を出しているトラス
+# jobs = ロケータ移動の scriptJob ID / busy = 再生成中 (ロケータの自動移動でプレビューを出さない)
 
 
 def _selection():
@@ -161,13 +168,22 @@ def _compute_preview():
     return t.preview_points_for(key, **kw), t.parent_world_matrix(parent), params["section"]
 
 
+def _component_mode():
+    """CV などコンポーネント編集中か (このときプレビューを触ると選択 / hilite が外れる)。"""
+    return _truss().is_component_editing()
+
+
 def _update_preview(*_):
     """プレビューを作り直す (OFF なら消す)。失敗してもステータス行に出すだけで、生成は妨げない。"""
     try:
+        if _component_mode():
+            return
         if not cmds.checkBox(F_PREVIEW, exists=True):
             return
         if not _preview_on():
             _clear_preview()
+            return
+        if _show_edit_preview():  # 編集用の点を出している間は、その形 (スナップ後) を黄色で出す
             return
         try:
             polylines, matrix, section = _compute_preview()
@@ -181,12 +197,59 @@ def _update_preview(*_):
         cmds.warning("[MS2026] プレビュー: {}".format(e))
 
 
+def _active_edit_group():
+    """編集用の点を出しているトラス (long 名)。ロケータが消えていたら None にして状態を片付ける。"""
+    g = _state["edit_group"]
+    t = _truss()
+    if g and cmds.objExists(g) and t.is_truss_group(g) and len(t.edit_locators(g)) >= 2:
+        return g
+    _state["edit_group"] = None
+    return None
+
+
+def _show_edit_preview():
+    """編集用の点がある場合、ロケータの現在位置 (スナップ後) の中心線をプレビューに出す。出したら True。"""
+    g = _active_edit_group()
+    if g is None:
+        return False
+    t = _truss()
+    angle, grid = _snap()
+    polylines = t.edit_points_preview(g, snap_angle=angle, snap_grid=grid)
+    t.show_preview(polylines, t.parent_world_matrix(g), _params()["section"])
+    return True
+
+
+def _on_locator_moved():
+    """ロケータの translate が変わった (W キーで動かしている) ときにプレビューを追従させる。"""
+    try:
+        if _state["busy"] or not cmds.window(WINDOW, exists=True) or not _preview_on():
+            return
+        _show_edit_preview()
+    except Exception:  # noqa: BLE001  ロケータが消えた等は何もしない
+        pass
+
+
+def _attach_edit_jobs():
+    """各ロケータの translate に scriptJob を張り直す (名前の振り直し・追加・削除のあとも呼ぶ)。"""
+    for j in _state["jobs"]:
+        if cmds.scriptJob(exists=j):
+            cmds.scriptJob(kill=j, force=True)
+    _state["jobs"] = []
+    g = _active_edit_group()
+    if g is None:
+        return
+    for loc in _truss().edit_locators(g):
+        _state["jobs"].append(cmds.scriptJob(attributeChange=[loc + ".translate", _on_locator_moved], parent=WINDOW))
+
+
 def _on_preview_toggle(*_):
     cmds.optionVar(intValue=(OPT_PREVIEW, 1 if _preview_on() else 0))
     _update_preview()
 
 
 def _on_selection(*_):
+    if _component_mode():  # CV 編集中は何もしない (オブジェクトモードに戻ったときに更新)
+        return
     sel = _selection()
     if sel == _state["sel"]:
         return
@@ -254,6 +317,8 @@ def _created(grp, label):
 @_undo_chunk("MS2026 トラス生成")
 def _do_create():
     _create()
+    _state["edit_group"] = None  # 新しいトラスが選択されるので、前の編集用の点のプレビューは出さない
+    _attach_edit_jobs()
     _clear_preview()  # 生成した実物と重なるので消す。選択変更ではすぐ復活させない
     _state["sel"] = _selection()
 
@@ -299,11 +364,9 @@ def _create():
 def _selected_truss():
     t = _truss()
     for s in cmds.ls(selection=True, long=True) or []:
-        node = s
-        while node:
-            if t.is_truss_group(node):
-                return node
-            node = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+        g = t.resolve_truss(s)  # グループ / 部材 / 編集用の点 (Truss_<名前>_P..) のどれでも親トラスを返す
+        if g:
+            return g
     return None
 
 
@@ -329,9 +392,21 @@ def _do_rebuild():
         kw.update(width=cmds.floatFieldGrp(F_WIDTH, q=True, value1=True), height=cmds.floatFieldGrp(F_HEIGHT, q=True, value1=True))
     else:
         kw.update(length=cmds.floatFieldGrp(F_LEN, q=True, value1=True))
-    grp = t.rebuild(grp, **kw)
-    cmds.select(grp, replace=True)
-    _status("再生成: {}".format(grp))
+    _state["busy"] = True
+    try:
+        grp = t.rebuild(grp, **kw)
+    finally:
+        _state["busy"] = False
+    locs = t.edit_locators(grp) if info["kind"] == "path" else []
+    if locs:  # 続けて W キーで動かせるよう、ロケータを選んだままにする
+        cmds.select(locs, replace=True)
+        _state["edit_group"] = grp
+        _attach_edit_jobs()
+    else:
+        cmds.select(grp, replace=True)
+    _clear_preview()  # 生成した実物と重なるので消す。ロケータを動かすと再び出る
+    _state["sel"] = _selection()
+    _status("再生成: {}".format(grp) + ("（点が少しずれて揃ったときはスナップの結果です）" if locs else ""))
 
 
 def _selected_path_truss():
@@ -341,10 +416,80 @@ def _selected_path_truss():
     return grp
 
 
-@_undo_chunk("MS2026 パスカーブ")
-def _do_edit_curve():
-    crv = _truss().make_edit_curve(_selected_path_truss())
-    _status("パスカーブ: {}（CV を動かして「選択したトラスを再生成」。トラスを選び直す）".format(crv))
+def _edit_target():
+    """編集用の点の操作対象トラス。選択 (トラス / 部材 / ロケータ) → 編集中のトラスの順。"""
+    grp = _selected_truss() or _active_edit_group()
+    if grp is None:
+        raise RuntimeError("トラス（または部材・編集用の点）を選択してください")
+    return grp
+
+
+def _selected_locators(grp):
+    """選択中のロケータのうち grp の編集用の点を、番号順の (index, long 名) で返す。"""
+    locs = _truss().edit_locators(grp)
+    sel = set(cmds.ls(selection=True, long=True) or [])
+    return [(i, l) for i, l in enumerate(locs) if l in sel]
+
+
+@_undo_chunk("MS2026 編集用の点を表示")
+def _do_show_points():
+    t = _truss()
+    grp = _edit_target()
+    was_path = t.read_info(grp).get("kind") == "path"
+    locs = t.make_edit_points(grp)
+    _state["edit_group"] = cmds.ls(grp, long=True)[0]
+    _attach_edit_jobs()
+    _update_preview()
+    _state["sel"] = _selection()
+    _status("編集用の点 {} 個。黄色い十字を W キーで動かし『選択したトラスを再生成』".format(len(locs))
+            + ("" if was_path else "（パスに変換しました）"))
+
+
+@_undo_chunk("MS2026 点を追加")
+def _do_add_point():
+    t = _truss()
+    grp = _edit_target()
+    sel = _selected_locators(grp)
+    if not sel:
+        raise RuntimeError("後ろに点を足したい黄色い点（ロケータ）を選択してください")
+    new = None
+    for i, _ in reversed(sel):  # 後ろから足すので前の番号は変わらない
+        new = t.insert_edit_point(grp, t.edit_locators(grp)[i])
+    cmds.select(new, replace=True)
+    _attach_edit_jobs()
+    _update_preview()
+    _state["sel"] = _selection()
+    _status("点を追加しました（{} 個）".format(len(t.edit_locators(grp))))
+
+
+@_undo_chunk("MS2026 点を削除")
+def _do_del_point():
+    t = _truss()
+    grp = _edit_target()
+    sel = _selected_locators(grp)
+    if not sel:
+        raise RuntimeError("削除したい黄色い点（ロケータ）を選択してください")
+    rest = None
+    for i, _ in reversed(sel):
+        rest = t.delete_edit_point(grp, t.edit_locators(grp)[i])
+    cmds.select(rest, replace=True)
+    _attach_edit_jobs()
+    _update_preview()
+    _state["sel"] = _selection()
+    _status("点を削除しました（{} 個）".format(len(rest)))
+
+
+@_undo_chunk("MS2026 編集用の点を消す")
+def _do_clear_points():
+    t = _truss()
+    grp = _edit_target()
+    t.clear_edit_points(grp)
+    _state["edit_group"] = None
+    _attach_edit_jobs()
+    cmds.select(grp, replace=True)
+    _clear_preview()
+    _state["sel"] = _selection()
+    _status("編集用の点を消しました（形は保存されています）")
 
 
 @_undo_chunk("MS2026 パスに変換")
@@ -358,7 +503,7 @@ def _do_convert():
         return
     grp = t.convert_to_path(grp)
     cmds.select(grp, replace=True)
-    _status("パスに変換: {}（『パスカーブを表示 / 作成』で形を編集できます）".format(grp))
+    _status("パスに変換: {}（『編集用の点を表示』で形を編集できます）".format(grp))
 
 
 @_undo_chunk("MS2026 カーブ切り離し")
@@ -378,9 +523,9 @@ def show_window():
         cmds.deleteUI(WINDOW)
     cmds.window(WINDOW, title="MS2026 トラス生成", widthHeight=(380, 760), sizeable=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4, columnOffset=("both", 6))
-    cmds.text(label="① 種類と寸法を入れる（黄色のプレビューがシーンに出る）→ ② 生成\n"
-                    "③ 形を変えるなら『パスカーブを表示 / 作成』で出るカーブの CV を X キー押しながら動かし、\n"
-                    "    トラスを選んで『選択したトラスを再生成』。直線・門型は『パスに変換』してから\n"
+    cmds.text(label="① 種類と寸法を入れる（黄色のプレビュー）→ ② 生成\n"
+                    "③ 形を変えるなら『編集用の点を表示』で出る黄色い十字を W キーで動かし、『再生成』\n"
+                    "    （動かすと黄色の線が追従。再生成でスナップが効く）\n"
                     "部材 1 本 = SC_ 1 つ = Box コライダー 1 つ。SM_Bg_ 配下に作ると Export Block の対象。単位 cm", align="left")
     cmds.checkBox(F_PREVIEW, label="プレビュー表示（黄色の線 = 部材の中心線、正方形 = 断面）",
                   value=bool(cmds.optionVar(q=OPT_PREVIEW)) if cmds.optionVar(exists=OPT_PREVIEW) else True,
@@ -407,15 +552,18 @@ def show_window():
     for lbl in ("自動（ポリライン 90°・曲線はなし）", "なし", "45°", "90°"):
         cmds.menuItem(label=lbl)
     cmds.floatFieldGrp(F_GRID, changeCommand=_update_preview, label="グリッド cm（0 = なし）", value1=t.DEFAULT_SNAP_GRID, columnWidth2=(130, 80))
-    cmds.text(label="CV 移動は X キー（グリッドスナップ）を押しながら。再生成でスナップが効く", align="left")
+    cmds.text(label="点を動かすときは W キー。再生成でグリッド / 角度に揃う", align="left")
     cmds.floatFieldGrp(F_SECTION, changeCommand=_update_preview, label="断面サイズ", value1=d["section"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_CHORD, label="弦径", value1=d["chord_dia"], columnWidth2=(130, 80))
     cmds.floatFieldGrp(F_SEG, label="セグメント長", value1=d["seg_len"], columnWidth2=(130, 80))
     cmds.button(label="生成", command=_guard(_do_create))
+    cmds.button(label="編集用の点を表示", command=_guard(_do_show_points))
+    cmds.button(label="選択した点の後ろに点を追加", command=_guard(_do_add_point))
+    cmds.button(label="選択した点を削除", command=_guard(_do_del_point))
+    cmds.button(label="編集用の点を消す", command=_guard(_do_clear_points))
     cmds.button(label="選択したトラスを再生成", command=_guard(_do_rebuild))
     cmds.button(label="パスに変換（直線・門型 → パス）", command=_guard(_do_convert))
-    cmds.button(label="パスカーブを表示 / 作成", command=_guard(_do_edit_curve))
-    cmds.button(label="カーブを切り離す", command=_guard(_do_detach))
+    cmds.button(label="マニュアル", command=_guard(_open_manual))
     cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")
     cmds.showWindow(WINDOW)
@@ -423,4 +571,7 @@ def show_window():
     cmds.scriptJob(uiDeleted=[WINDOW, _on_window_closed], runOnce=True)
     cmds.scriptJob(event=["SelectionChanged", _on_selection], parent=WINDOW)
     _state["sel"] = _selection()
+    _state["edit_group"] = None
+    _state["jobs"] = []
+    _state["busy"] = False
     _on_kind()  # ヒント表示とプレビュー更新

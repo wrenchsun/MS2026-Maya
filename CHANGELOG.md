@@ -6,7 +6,12 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 
 ## [Unreleased]
 
+### 修正
+- トラス生成のプレビューが、編集用カーブの Control Vertex モードに入った瞬間にカーブの選択 / hilite を外して CV を編集できなくなる問題を修正。`_no_undo` は選択と hilite を「変わったときだけ」復元し、UI はコンポーネントモード中は選択変更・`_update_preview` でプレビューを触らない
+
 ### 追加
+- HTML マニュアルを追加（`docs/manual.html`、メニュー `Tools > MS2026 > マニュアル` とグレーボックス / トラス生成ウィンドウの **マニュアル** ボタンから既定のブラウザで開く。`ms2026_maya_tools.manual_path()` / `open_manual()`）
+- トラスの形の編集をカーブの CV 編集から、角ごとのロケータ方式に変更: `make_edit_points`（黄色のロケータ `Truss_<名前>_P01..` を最上位 `Truss_<名前>_Edit` の下に作り、JSON に `edit_points` を保存。直線 / 門型は自動でパスに変換）、`clear_edit_points`、`insert_edit_point`（中点に挿入して振り直し）、`delete_edit_point`（2 点未満は ValueError）、`edit_locators`、`resolve_truss`（部材 / ロケータから親トラス）、`edit_points_preview`。`rebuild` の点列は ロケータ → `source_curve` → 保存 points の順で、ロケータから読んだ点は保存 points に書き戻し（`source_curve` は None）、再生成後にロケータをスナップ後の位置へ揃える。ウィンドウは「編集用の点を表示 / 選択した点の後ろに点を追加 / 選択した点を削除 / 編集用の点を消す」に整理し、ロケータの移動に scriptJob で黄色のプレビュー線を追従。「パスカーブを表示 / 作成」「カーブを切り離す」はウィンドウから外した（`make_edit_curve` / `detach_curve` はコードに残す）。mayapy 検証は `tests/verify_truss.py`。`### 互換性`: JSON の `version` は不変（`edit_points` は任意キーの追加）
 - トラス生成の Undo 修正: プレビュー（`show_preview` / `clear_preview`）は `undoInfo(stateWithoutFlush=False)` で Undo 履歴に乗らず、選択も変えない。`clear_preview` は `MS2026_TrussPreview*` の最上位をすべて消す（Undo で復活 / 連番 `Grp1..` になったものも）。生成・再生成・パスに変換・パスカーブ・切り離しは 1 つの Undo チャンクで、1 回の Ctrl+Z で戻る
 - トラス生成の使いやすさ: (1) 生成前プレビュー — `preview_points_for`（直線 / 門型 3 本 / パス / プリセット / 点の部材中心線をスナップ後の点列で返す）、`show_preview` / `clear_preview`（最上位 `MS2026_TrussPreviewGrp` に黄色の degree 1 カーブ、Reference 表示で選択不可、始点に断面の正方形、選択は変えない）、`parent_world_matrix`。ウィンドウに「プレビュー表示」（既定 ON、optionVar `ms2026_truss_preview`）。コントロール変更と選択変更で更新、生成・ウィンドウを閉じる・リロードで消える。(2) `convert_to_path`: 直線 -> 2 点、門型 -> コの字 4 点のパスに作り直す（ボタン「パスに変換」）。門型の梁は柱の内側ではなく柱の中心線間を結ぶ（長さ 幅 − 断面）。(3) 説明文・種類別ヒントを書き直し、README のトラス生成節を整理。`build_preset` の点列計算を `_preset_final` に共通化（挙動不変）
 - トラスの直角などを簡単に作る: `snap_points`（グリッド cm + 角度 0/45/90 のスナップ。先頭点固定で累積）、形プリセット `preset_points` / `build_preset`（line / L / U / rect、平面 XY / XZ）、ロケータの選択順から作る `points_from_selection` / `build_from_points`。`build_path` / `build_from_curve` / `rebuild` が `snap_angle` / `snap_grid` を取り JSON に保存（既定 90 / 10。`build_from_curve` は角度未指定なら degree 1 = 90、滑らかなカーブ = 0）。断面以下の短いスパンはスキップして本数を print。ウィンドウに種類「形プリセット」「選択した点から」、スナップ角度 / グリッド、CV 移動は X キーのヒント。README に「おすすめの手順」

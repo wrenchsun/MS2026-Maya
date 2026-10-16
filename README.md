@@ -5,6 +5,7 @@ MS2026（Unity）のグレーボックスを Maya に渡し、Maya で作った�
 
 - 仕様の正（命名規則・JSON の形・Unity 側の動き）: MS2026 の `Docs/Guides/MayaGreyboxPipeline.md`
 - 配布・更新: T-Drive の外部ツールパッケージ（T-Drive `docs/13_distribution.md` §6）。T-Drive の更新ウィンドウから URL で追加・更新できるようになる予定。それまでは下の手動導入
+- マニュアル: [docs/manual.html](docs/manual.html)（メニュー `Tools > MS2026 > マニュアル`、各ウィンドウの **マニュアル** ボタン）
 - 版: [VERSION](VERSION) / [CHANGELOG.md](CHANGELOG.md)（Unity 側と対で読む JSON の版もここ）
 
 ```
@@ -112,7 +113,7 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 
 1. **種類と寸法を入れる**。シーンに黄色のプレビュー（部材の中心線と、始点の断面の正方形）が出るので、スケールを見ながら調整する
 2. **生成**。生成先は `SM_Bg_<区画>`（またはその子孫）を選んでいればその区画の下（`Export Block` のコライダーになる）、他の transform を選んでいればその下、未選択なら最上位（`SM_Truss_` を選んだ場合はそのトラスの親）。ステータス行に「生成先」が出る。後から `SM_Bg_` に入れてもそのまま書き出せる
-3. **形を変えたいとき**: トラスを選んで **パスカーブを表示 / 作成** → 出てきたカーブの CV を（X キーを押しながら）動かし、トラスを選んで **選択したトラスを再生成**。直線・門型は先に **パスに変換** する
+3. **形を変えたいとき**: トラスを選んで **編集用の点を表示** → 出てきた黄色い十字を W キーで動かし、**選択したトラスを再生成**（直線・門型は自動でパスに変換される）
 
 ### 種類の説明
 
@@ -139,13 +140,16 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 **パスに変換**（直線 / 門型のトラスを選んで押す）で、同じグループ・名前・寸法のまま `kind: "path"` に作り直す（`convert_to_path(group)`）。直線は 2 点、門型はコの字 4 点（柱 2 本は全高、梁は柱の中心線間）。パスのトラスには「すでにパスです」と出る。**手動編集は失われる**。
 
 - 門型との違い: `build_gate` は梁を柱の内側に収める（梁の長さ = 幅 − 断面 × 2）が、パスは梁が柱の中心線間を結ぶので角で部材どうしが重なり、梁の上端は高さより断面の半分だけ上に出る。梁の長さは 幅 − 断面（600 幅・断面 30 なら 570）
-- `snap_grid` は 0 で保存される（柱の中心が 10 の倍数とは限らないため）。変換後に **パスカーブを表示 / 作成** で編集できる（ボタンは 2 回押す）
+- `snap_grid` は 0 で保存される（柱の中心が 10 の倍数とは限らないため）。変換後に **編集用の点を表示** で編集できる
 
-### 再生成と編集用カーブ
+### 再生成と編集用の点
 
-- **選択したトラスを再生成**: グループの文字列属性 `ms2026_truss` の JSON から子を作り直す。グループ自身の位置・回転は保たれる。**グループ内の手動編集（部材の移動・回転・削除・追加）は失われる**
-- **パスカーブを表示 / 作成**: 保存した点から最上位に `Truss_<名前>_Path`（degree 1）ができ、`source_curve` がそれに差し替わる。この CV を動かし（**X キー（グリッドスナップ）を押しながら**だと楽）、トラスを選んで再生成すると反映（スナップも効く）。元のカーブを直接動かして再生成してもよい。編集用カーブは区画の外に置かれ、`Check` / `Export Block` の対象にならない
-- **カーブを切り離す**: `source_curve` を空にする。以後カーブを消しても影響しない。カーブが消えていたら再生成は保存した `points` から行い、warning を 1 行出す
+- **編集用の点を表示**: パストラス（直線・門型を選んだときは自動でパスに変換）の角ごとに、黄色い十字のロケータ `Truss_<名前>_P01, _P02, ...` が最上位の `Truss_<名前>_Edit` の下に出る。普通のオブジェクトなので **W キーで動かす**だけ（CV モードは使わない）。動かしている間、黄色のプレビュー線が追従する（スナップ後の形）。トラスの部材やロケータを選んでいても使える
+- **選択したトラスを再生成**: ロケータの位置から作り直す（ロケータを選んだままでよい）。スナップ（グリッド / 角度）が効き、ロケータも揃った位置に移る。形は保存されるので、ロケータを消しても残る。グループ内の手動編集（部材の移動・回転・削除・追加）は失われる
+- **選択した点の後ろに点を追加**: 選んだ点と次の点の中点に新しい点を足して番号を振り直す（閉じたパスは最後の点なら最初との中点）。**選択した点を削除**: 点は 2 個以上残す
+- **編集用の点を消す**: `Truss_<名前>_Edit` を消す。以後は保存した点から再生成する
+- 編集用の点は区画の外に置かれ、`Check` / `Export Block` の対象にならない
+- 点列の優先順位: 編集用の点 → `source_curve` のカーブ → 保存した `points`。カーブ方式（`make_edit_curve` / `detach_curve`）はコードから使える
 
 ### コライダーの考え方
 
@@ -153,7 +157,7 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 
 構成: `SM_Bg_<区画>/SM_Truss_<名前>/SC_Truss_<名前>`（直線）、`SC_Truss_<名前>_PostL / _PostR / _Beam`（門型）。グループが `SM_Truss_` なのは `Check` が全 transform に `SM_`/`SC_`/`UCX_` を要求するため。
 
-コードから: `build_straight` / `build_gate` / `build_path` / `build_from_curve` / `build_preset` / `build_from_points` / `rebuild` / `make_edit_curve` / `detach_curve` / `convert_to_path` / `snap_points` / `preset_points` / `points_from_selection` / `sample_curve` / `preview_points_for` / `show_preview` / `clear_preview`。検証は `tests/verify_truss.py`（mayapy）。
+コードから: `build_straight` / `build_gate` / `build_path` / `build_from_curve` / `build_preset` / `build_from_points` / `rebuild` / `make_edit_points` / `clear_edit_points` / `insert_edit_point` / `delete_edit_point` / `edit_locators` / `resolve_truss` / `make_edit_curve` / `detach_curve` / `convert_to_path` / `snap_points` / `preset_points` / `points_from_selection` / `sample_curve` / `preview_points_for` / `show_preview` / `clear_preview`。検証は `tests/verify_truss.py`（mayapy）。
 
 ## リロード
 
