@@ -49,6 +49,12 @@ def reload_all(reopen=True):
     cmds = _cmds()
     gui = _is_gui(cmds)
     opened = _close_windows(cmds) if gui else []
+    if gui:
+        try:  # トラス生成のプレビュー (最上位の MS2026_TrussPreviewGrp) も消す
+            import ms2026_maya_truss
+            ms2026_maya_truss.clear_preview()
+        except Exception:  # noqa: BLE001
+            pass
 
     dropped = [n for n in list(sys.modules) if n.startswith(PREFIX) and n != SELF]
     for n in dropped:
