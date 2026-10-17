@@ -6,6 +6,12 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 
 ## [Unreleased]
 
+### 検証
+- 2026-10-18 Unity（MS2026 `ssk_CreateMap` bdc4533、`feature/maya-simple-collision` をマージ済み）でトラスの取り込みを確認。門型 + 直線 + 円 R300 + 塔の区画 `SM_Bg_TrussTest` を `BackgroundPlacer.AddColliders` に通し、BoxCollider 15 個・MeshCollider 0 個。各 Box の world 中心とサイズは描画メッシュの bounds と差 0.0000 m（回転した円の部材を含む）、Maya の world AABB とも差 0.0000 m（X 反転・0.01 倍の前提どおり）
+
+### 互換性
+- 1.1.0 の「Unity 側には `.colliders.json` の取り込みがまだ無い」は誤り。取り込みは MS2026 の `feature/maya-simple-collision`（`SimpleColliderBuilder`、SupportedVersion 1）にあり、2026-10-18 に `ssk_CreateMap` へマージした（main は未マージ）。トラス用に Unity 側の追加は不要
+
 ## [1.1.0] - 2026-10-16
 
 ライブ会場用トラスのプロシージャル生成を追加した版。
