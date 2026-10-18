@@ -55,7 +55,7 @@
   <li><b>Export Block</b> で区画ごとの FBX（と当たり判定のデータ）を書き出す。</li>
   <li>Unity で <b>Import Background</b> を実行すると、背景が地図に入る。</li>
 </ol>
-<p>このほかに、ライブ会場用の鉄骨（トラス）を数値入力で自動生成する「トラス生成」もあります。</p>
+<p>このほかに、ライブ会場用の鉄骨（トラス）を数値入力で自動生成する「トラス生成」と、Unity のディスプレイ・ライトの位置を動かして戻す機能（3.7）もあります。</p>
 <div class="note"><b>FBX</b> は 3D モデルを渡すためのファイル形式です（Maya と Unity の間の受け渡しに使います）。</div>
 
 <!-- ============================================================ 2 -->
@@ -204,6 +204,18 @@
 </ol>
 <p>Unity 側では、小物の FBX は <code>Tools &gt; MS2026 &gt; Map &gt; Import Props</code>、区画は <code>Import Background</code> で取り込みます。小物の中の名前は Check の対象外です。</p>
 <p>登録を使わずに、作ったモデルを選んで <b>選択を小物として書き出す</b> を押して <code>Prop_&lt;名前&gt;.fbx</code> だけを書き出すこともできます。</p>
+
+<h3>3.7 ディスプレイ・ライトの位置を動かして Unity に戻す</h3>
+<p>Unity に置いたディスプレイ（映像パネル）やライトの<b>位置・向き・大きさ</b>だけを Maya で調整して戻せます。Maya では<b>ディスプレイもライトも作り込みません</b>。Unity が書き出した仮の置き物（板や箱）を動かす、新しい置き物を足す、だけです。見た目や設定（映す映像・色など）は Unity 側のままです。ウィンドウ下の <b>5. ディスプレイ・ライト</b> を使います。</p>
+<ol>
+  <li>Unity で <code>Tools &gt; MS2026 &gt; Map &gt; Exchange &gt; Export Layout (Displays・Lights)</code> を実行する（<code>Export</code> フォルダに <code>&lt;Scene&gt;.layout.json</code> ができる）。</li>
+  <li>Maya の一覧から JSON をクリックして <b>選択した layout.json を読み込む</b>。<code>MS2026_Layout</code> グループの下に <code>DSP_&lt;種類&gt;__&lt;名前&gt;</code>（ディスプレイ）・<code>LGT_&lt;種類&gt;__&lt;名前&gt;</code>（ライト）が並ぶ。「Layout FBX も読み込む」を入れると、Unity が書いた仮の形を使う。</li>
+  <li>置き物を選んで移動・回転・拡大縮小する。ノードの名前は<b>変えない</b>のが安全（名前が Unity に戻る）。</li>
+  <li>足したいときは <b>kind</b> を選び、名前（半角英数字とアンダースコアだけ。連続した <code>__</code>・日本語・スペース・<code>:</code> は不可。既にある名前も不可）を入れて <b>置き物を追加</b>。</li>
+  <li><b>配置を書き出す</b> で <code>&lt;Scene&gt;.layout.json</code> が「区画FBX・props.json 出力先」（<code>Import</code>）に書かれる。名前が不正・重複などがあると何も書かずに止まり、理由が一覧で出る。</li>
+  <li>Unity で <code>Tools &gt; MS2026 &gt; Map &gt; Exchange &gt; Import Layout (Displays・Lights)</code> を実行する。</li>
+</ol>
+<div class="warn"><b>注意:</b> <b>Vision（3D パネル）</b>はパネルだけが動き、中のスタジオは動きません。JSON に無くなった置き物は Maya でも Unity でも自動では消えません。</div>
 
 <!-- ============================================================ 4 -->
 <h2 id="truss">4. トラス生成</h2>

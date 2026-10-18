@@ -7,6 +7,7 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 import ms2026_maya_collision as collision
+import ms2026_maya_layout as layout  # noqa: F401  配置往復 (layout.import_layout / export_layout / add_placeholder)
 import ms2026_maya_settings as settings
 from ms2026_maya_geometry import non_polygon_problems, convert_to_polygons  # noqa: F401
 from ms2026_maya_ghost import set_greybox_transparent  # noqa: F401

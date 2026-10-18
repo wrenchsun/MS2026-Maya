@@ -105,6 +105,23 @@ Unity が読めるのはポリゴンメッシュだけ。NURBS サーフェス /
 - 小物が 1 つも無い区画では、古い `.props.json` は削除される
 - Unity 側: 小物 FBX は `Tools > MS2026 > Map > Import Props`、区画は従来どおり `Import Background`
 
+## ディスプレイ・ライトの配置往復（`.layout.json`）
+
+Unity の Map Builder に置いたディスプレイ・ライトの**位置・向き・大きさだけ**を Maya で動かして Unity へ戻す（契約は MS2026 `Docs/Guides/MayaGreyboxPipeline.md` §8、Unity 側 `LayoutFile.SupportedVersion` = 1 と対）。ウィンドウの **5. ディスプレイ・ライト**（実装は `ms2026_maya_layout.py` / `ms2026_maya_ui_layout.py`）。
+
+- **Maya はディスプレイもライトもモデリングしない。** 仮の置き物（`DSP_<kind>__<name>` / `LGT_<kind>__<name>`）を移動・回転・拡縮し、必要なら新しい置き物を足すだけ。形・見た目・設定（プレイリスト・色など）は Unity 側が持ち、Maya からは来ない
+- **Vision（3D パネル）はパネルだけが動き、中のスタジオは動かない**
+- 流れ
+  1. Unity: `Tools > MS2026 > Map > Exchange > Export Layout (Displays・Lights)` → `<MayaWork>/Export/<Scene>.layout.json` と `Greybox_<Scene>_Layout_<日付>.fbx`
+  2. Maya: 一覧（フォルダ設定の「グレーボックスFBX」＝ `Export`）から JSON を選び **選択した layout.json を読み込む**。「対応する Layout FBX も読み込む」を ON にすると、同じフォルダの最新の FBX（Unity が絶対座標で書く仮の形）を読み込んで同名のノードに対応させる。OFF（既定）なら向きが分かる仮の形（ディスプレイ = 薄い板、ライト = 箱。どちらも +Z 側に円錐の目印）を `MS2026_Layout` グループの下に作る。位置・回転・拡縮は常に JSON のワールド行列（行優先 16 値、cm、平行移動は 12〜14）。FBX と JSON の位置が 0.01 cm を超えてずれたら警告する
+  3. 動かす（親グループが不均一スケールでもワールド行列は変わらない）。**置き物を追加**: kind（Flat / Curved / Ticker / Vision / Signboard / SignboardCurved / Beam / Laser / LedBar / Strobe / MsPoint / MsSpot）と名前を選ぶ。名前は `[A-Za-z0-9_]` だけで `__` を含まず、重複不可（`DSP_<kind>__<name>` のノードができる。選択中のノードがあればその位置に置く）。ノード名を変えると JSON の `name` も変わる
+  4. **配置を書き出す** → `<出力先>/<Scene>.layout.json`（出力先 = フォルダ設定の「区画FBX・props.json 出力先」＝ `Import`。Unity の `Import Layout` の既定の場所）。`version` 1・`units` `"cm"`・項目 `{id（あれば）, name, category, kind, matrix}`（`matrix` は `xform(q=True, ws=True, matrix=True)`）。書き出し先に同名の JSON があればその `scene` の値を保つ
+  5. Unity: `Tools > MS2026 > Map > Exchange > Import Layout (Displays・Lights)`
+- 読み込み規則: 既存の置き物は `id` → 名前（完全一致で 1 つだけ）の順で照合して動かし、無ければ作る。JSON に無い置き物は消さず一覧を出す。名前が不正（日本語・スペース・`__` など）・未知の kind・matrix が 16 値でない項目はスキップして警告する。すでに置き物がある状態で FBX も読み込むときは、置き換えるかを確認する（Unity で書き出し直したとき用）
+- Unity の GlobalObjectId は各ノードのカスタム属性に残る（保存・再読込しても消えない）: `ms2026_id`（無ければ付けない。**Maya で足した物には付けない** = Unity が新規作成する）、`ms2026_kind`、`ms2026_category`、`ms2026_layout_scene`（読み込んだ JSON の scene）
+- 書き出しは、置き物の名前が `DSP_/LGT_<kind>__<name>` の形でない・名前が不正・`ms2026_kind` と名前の kind が食い違う・`id` の無い物が同名になる、のいずれかがあると**何も書かずに止まる**（全件を列挙する）。`id` を持つ同名どうしは警告だけで書く
+- コードから: `ms2026_maya_layout.import_layout(json_path, fbx_path=None, replace=False)` / `add_placeholder(kind, name, matrix=None)` / `export_layout(out_dir=None, scene=None)`。検証は `tests/verify_layout.py`（mayapy）
+
 ## トラス生成（ライブ会場用）
 
 `Tools > MS2026 > トラス生成...` のウィンドウで、4 本弦のボックストラスをプロシージャルに作る（実装は `ms2026_maya_truss.py`、ウィンドウは `ms2026_maya_ui_truss.py`）。単位 cm。

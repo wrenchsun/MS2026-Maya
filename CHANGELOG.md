@@ -6,10 +6,24 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 
 ## [Unreleased]
 
+### 追加
+- ディスプレイ・ライトの配置往復 `<Scene>.layout.json`（Unity `MapExchange` の `LayoutFile` / MX-3）: `ms2026_maya_layout.py`（`import_layout` / `add_placeholder` / `export_layout` / `find_placeholders`）とウィンドウの **5. ディスプレイ・ライト**（`ms2026_maya_ui_layout.py`）
+  - 読み込み: JSON のワールド行列（行優先 16 値、cm）を `DSP_<kind>__<name>` / `LGT_<kind>__<name>` の置き物に入れる。`id` → 名前の順で照合、JSON に無い置き物は消さない。`Greybox_<Scene>_Layout_<日付>.fbx` を読み込んで同名のノードに対応させることもでき（無ければ向きの分かる仮の形を作る）、FBX と JSON の位置ずれを警告する
+  - 追加: 12 種の kind から選び、名前は `[A-Za-z0-9_]+`・`__` なし・重複不可
+  - 書き出し: 全置き物を `xform(q=True, ws=True, matrix=True)` で書き戻す（`version` 1、`id` はあれば保持、Maya で足した物には付けない、既存 JSON の `scene` を保つ）。不正な名前・未知の kind・`id` の無い同名があれば何も書かず全件を列挙して止まる
+  - カスタム属性 `ms2026_id` / `ms2026_kind` / `ms2026_category` / `ms2026_layout_scene`（保存・再読込しても残る）
+  - フォルダは既存の設定を流用（読み込み = グレーボックスFBX、書き出し = 区画FBX・props.json 出力先）
+- `tests/verify_layout.py`（mayapy 検証。配布対象の外）
+- README と `docs/manual.html` に配置往復の節。Vision（3D パネル）はパネルだけが動きスタジオは動かないこと、Maya は形を持たず置き物を動かす・足すだけであることを明記
+
 ### 検証
+- mayapy（Maya 2026）で `tests/verify_layout.py` が VERIFY OK: JSON -> 世界行列と属性、保存・再読込、`id` での再読み込み（同名 2 個）、移動 + 追加 -> 書き出しの行列が `xform` と一致・`id` 保持・新規は `id` なし、不正名 / 重複 / kind 不一致の拒否、不均一スケール + 回転の親の下でも往復でワールド行列が不変、Maya が書いた FBX の読み込みと置き換え。`tests/verify_truss.py` も VERIFY OK（回帰なし）
 - 2026-10-18 Unity（MS2026 `ssk_CreateMap` bdc4533、`feature/maya-simple-collision` をマージ済み）でトラスの取り込みを確認。門型 + 直線 + 円 R300 + 塔の区画 `SM_Bg_TrussTest` を `BackgroundPlacer.AddColliders` に通し、BoxCollider 15 個・MeshCollider 0 個。各 Box の world 中心とサイズは描画メッシュの bounds と差 0.0000 m（回転した円の部材を含む）、Maya の world AABB とも差 0.0000 m（X 反転・0.01 倍の前提どおり）
+- 未確認: Unity が実際に書いた FBX の読み込み、Unity 側 `Import Layout` での取り込み（MX-4）、GUI の操作
 
 ### 互換性
+- `.layout.json` **version 1** を新しく扱う。Unity 側 `LayoutFile.SupportedVersion` = 1 と対（`id` は version を上げない任意の追加欄）。既存の `.props.json`（version 2）/ `.colliders.json`（version 1）は不変
+- 読めなくなる変更なし。VERSION は据え置き（リリース時に決める）
 - 1.1.0 の「Unity 側には `.colliders.json` の取り込みがまだ無い」は誤り。取り込みは MS2026 の `feature/maya-simple-collision`（`SimpleColliderBuilder`、SupportedVersion 1）にあり、2026-10-18 に `ssk_CreateMap` へマージした（main は未マージ）。トラス用に Unity 側の追加は不要
 
 ## [1.1.0] - 2026-10-16

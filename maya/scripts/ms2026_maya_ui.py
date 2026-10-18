@@ -233,6 +233,11 @@ def _on_dirs_changed():
         cmds.text(PROP_LABEL, edit=True, label="保存先: " + _pdir())
     _refresh()
     _do_refresh_props()
+    try:
+        import ms2026_maya_ui_layout
+        ms2026_maya_ui_layout.refresh()
+    except Exception as e:  # noqa: BLE001  配置の枠が無くても他の一覧更新は止めない
+        cmds.warning("[MS2026] 配置一覧を更新できません: {}".format(e))
 
 
 def show_window():
@@ -245,6 +250,7 @@ def show_window():
     cmds.columnLayout(adjustableColumn=True, rowSpacing=6)
     import ms2026_maya_ui_settings
     import ms2026_maya_ui_tools
+    import ms2026_maya_ui_layout
     ms2026_maya_ui_settings.build_folder_frame(_status, _on_dirs_changed)
     cmds.frameLayout(label="1. 準備", collapsable=True, marginWidth=6, marginHeight=6)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4)
@@ -292,6 +298,7 @@ def show_window():
     cmds.text(PROP_LABEL, label="保存先: " + _pdir(), align="left")
     cmds.setParent("..")
     cmds.setParent("..")
+    ms2026_maya_ui_layout.build_layout_frame(_status)
     cmds.button(label="マニュアル", command=_guard(lambda: _t().open_manual()))
     cmds.button(label="リロード", command=_guard(_reload_deferred))
     cmds.text(STATUS, label="待機中", align="left")
