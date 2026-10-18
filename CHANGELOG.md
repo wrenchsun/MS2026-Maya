@@ -6,6 +6,8 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-18
+
 ### 追加
 - ディスプレイ・ライトの配置往復 `<Scene>.layout.json`（Unity `MapExchange` の `LayoutFile` / MX-3）: `ms2026_maya_layout.py`（`import_layout` / `add_placeholder` / `export_layout` / `find_placeholders`）とウィンドウの **5. ディスプレイ・ライト**（`ms2026_maya_ui_layout.py`）
   - 読み込み: JSON のワールド行列（行優先 16 値、cm）を `DSP_<kind>__<name>` / `LGT_<kind>__<name>` の置き物に入れる。`id` → 名前の順で照合、JSON に無い置き物は消さない。`Greybox_<Scene>_Layout_<日付>.fbx` を読み込んで同名のノードに対応させることもでき（無ければ向きの分かる仮の形を作る）、FBX と JSON の位置ずれを警告する
@@ -23,7 +25,7 @@ Unity 側（MS2026 `MapExchange`）と対で読む JSON の版もここに書く
 
 ### 互換性
 - `.layout.json` **version 1** を新しく扱う。Unity 側 `LayoutFile.SupportedVersion` = 1 と対（`id` は version を上げない任意の追加欄）。既存の `.props.json`（version 2）/ `.colliders.json`（version 1）は不変
-- 読めなくなる変更なし。VERSION は据え置き（リリース時に決める）
+- 読めなくなる変更なし（MINOR）
 - 1.1.0 の「Unity 側には `.colliders.json` の取り込みがまだ無い」は誤り。取り込みは MS2026 の `feature/maya-simple-collision`（`SimpleColliderBuilder`、SupportedVersion 1）にあり、2026-10-18 に `ssk_CreateMap` へマージした（main は未マージ）。トラス用に Unity 側の追加は不要
 
 ## [1.1.0] - 2026-10-16
